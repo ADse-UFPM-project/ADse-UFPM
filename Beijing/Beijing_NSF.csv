@@ -1,0 +1,64 @@
+var,value,units,detail
+#=======================================================================
+# Site configuration: Beijing Olympic Forest Park
+# UFPM-TS-ABM input file
+# Sources: Chen et al. 2023; Natural Areas NYC 2024; Beijing Municipal
+#          Bureau of Statistics 2023; China Meteorological Administration
+#=======================================================================
+#
+#--- Site identity ---
+site_id,Beijing_NSF,,Unique identifier used for output folder naming
+site_name,Olympic Forest Park Beijing,,Official park name (Chinese: Aolinpike Senlin Gongyuan)
+city,Beijing,,City
+country,China,,Country
+#
+#--- Park configuration ---
+park_type,NSF,,Native Species Forest - mature planted native broadleaf forest
+service_target,recreation,,Primary service target: urban recreation and greening
+climate_zone,Temperate,,Temperate continental climate (Koppen: Dwa)
+#
+#--- Simulation settings ---
+n_years,100,yr,Simulation duration
+n_reps,30,,Number of stochastic replicates
+seed,2024,,Master random seed for reproducibility
+budget,110.0,,Annual management budget units (scaled; see budget_annual below)
+n_managers,4,,Number of manager agents
+#
+#--- Park physical characteristics ---
+park_area,611.7,ha,Measured from the corrected boundary polygon
+established_year,2008,yr,Year of park establishment (Olympic Games legacy)
+management_staff,320,persons,Permanent management and maintenance staff
+budget_annual,8500000,USD/yr,Estimated annual management budget
+native_species_count,89,species,Documented native plant species
+invasive_species_count,23,species,Documented invasive plant species (Robinia pseudoacacia dominant)
+#
+#--- Climate data (30-year normals 1991-2020) ---
+mean_temp,12.0,degC,Mean annual temperature
+temp_min,-3.7,degC,Mean temperature in coldest month (January)
+temp_max,26.9,degC,Mean temperature in hottest month (July)
+temp_sd,10.8,degC,Standard deviation of monthly mean temperatures
+annual_precip,550,mm/yr,Mean annual total precipitation
+precip_cv,0.32,,Coefficient of variation of monthly precipitation
+precip_min_month,8,mm,Mean precipitation in driest month (January)
+precip_max_month,185,mm,Mean precipitation in wettest month (July)
+relative_humidity,55,%,Mean annual relative humidity
+wind_speed,2.4,m/s,Mean annual wind speed
+sunshine_hours,2748,hr/yr,Annual sunshine duration
+frost_days,120,days/yr,Mean number of frost days per year
+#
+#--- Social and economic data (2023 estimates) ---
+urban_population,21.7,million,City total registered population
+population_density,1312,persons/km2,Urban core average population density
+gdp_per_capita,26000,USD,GDP per capita (converted from CNY at 7.1 CNY/USD)
+avg_household_income,42000,USD/yr,Mean urban household annual disposable income
+education_level,14.2,yr,Mean years of education (urban adult population)
+civic_participation,0.28,,Fraction of population engaged in civic or volunteer activities
+#
+#--- Visitor and access data ---
+park_visitors_annual,12000000,persons/yr,Documented annual visitor count
+park_visitor_density,17647,persons/ha/yr,Annual visitor density (visitors / park area)
+peak_daily_visitors,80000,persons/day,Estimated peak daily visitors (major holidays)
+transit_access,0.85,,Fraction of visitors arriving by public transport
+#
+#--- Notes ---
+notes,Beijing Olympic Forest Park (680 ha) was established for the 2008 Summer Olympics. It is one of the largest urban parks in Beijing and features native broadleaf species. Key management challenges include managing high visitor pressure along trail corridors and controlling encroachment by non-native Robinia pseudoacacia. Park is temperate continental with hot humid summers and cold dry winters.

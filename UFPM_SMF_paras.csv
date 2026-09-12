@@ -1,0 +1,276 @@
+para_name,value,detail,range,reference
+#=======================================================================
+# UFPM-TS-ABM Parameter Table
+# All model parameters are defined here. Edit the 'value' column only.
+# Other columns are for documentation and do not affect model execution.
+#
+# para_name prefix codes:
+#   NSF_  NISF_  NRF_  PF_                  park type parameters
+#   conservation_  tourism_  recreation_
+#     environmental_                         service target weights
+#   Tropical_  Subtropical_  Temperate_
+#     Boreal_  Semiarid_                     climate zone parameters
+#   Ce_  Cr_  Ct_  Cep_                      condition index formula weights
+#   invrem_  ecorest_  infra_
+#     visitor_  ecosvc_                      management intervention parameters
+#   eco_                                     ecological process parameters
+#   cfl_                                     conflict detection parameters
+#   soc_                                     social-ecological coupling parameters
+#   var_                                     climate variability parameters
+#=======================================================================
+#
+#--- PARK TYPE PARAMETERS --------------------------------------------
+# Initial landscape state and management cost per park type.
+# NSF  : Native Species Forest
+# NISF : Non-native/Invasive Species Forest
+# NRF  : Naturally Regenerated Forest
+# PF   : Plantation Forest
+#---------------------------------------------------------------------
+NSF_native_init_pct,0.85,Initial proportion of native species cover (0-1),0.70-0.95,Kowarik 2011; Natural Areas NYC 2024
+NSF_invasive_init_pct,0.10,Initial proportion of invasive species cover (0-1),0.05-0.20,Kowarik 2011
+NSF_canopy_init,0.70,Initial canopy cover fraction (0-1),0.55-0.85,Nowak & Crane 2002
+NSF_base_spread,0.04,Base monthly invasive spread rate before climate scaling,0.02-0.07,Lenda et al. 2024
+NSF_monitoring_radius,15,Spatial monitoring radius per manager agent (m),10-25,expert judgment
+NSF_budget_multiplier,1.8,Management cost multiplier relative to baseline budget,1.4-2.2,expert judgment
+#
+NISF_native_init_pct,0.25,Initial proportion of native species cover (0-1),0.10-0.40,Kowarik 2011
+NISF_invasive_init_pct,0.65,Initial proportion of invasive species cover (0-1),0.50-0.80,Kowarik 2011; Lenda et al. 2024
+NISF_canopy_init,0.60,Initial canopy cover fraction (0-1),0.45-0.75,Nowak & Crane 2002
+NISF_base_spread,0.10,Base monthly invasive spread rate,0.07-0.15,Lenda et al. 2024; Liu et al. 2023
+NISF_monitoring_radius,12,Spatial monitoring radius per manager agent (m),8-20,expert judgment
+NISF_budget_multiplier,1.5,Management cost multiplier,1.2-1.8,expert judgment
+#
+NRF_native_init_pct,0.60,Initial proportion of native species cover (0-1),0.45-0.75,Prober et al. 2019
+NRF_invasive_init_pct,0.30,Initial proportion of invasive species cover (0-1),0.15-0.45,Prober et al. 2019
+NRF_canopy_init,0.55,Initial canopy cover fraction (0-1),0.40-0.70,Nowak & Crane 2002
+NRF_base_spread,0.08,Base monthly invasive spread rate,0.05-0.12,Lenda et al. 2024
+NRF_monitoring_radius,10,Spatial monitoring radius per manager agent (m),7-15,expert judgment
+NRF_budget_multiplier,1.4,Management cost multiplier,1.1-1.7,expert judgment
+#
+PF_native_init_pct,0.35,Initial proportion of native species cover (0-1),0.20-0.50,Bremer & Farley 2010
+PF_invasive_init_pct,0.12,Initial proportion of invasive species cover (0-1),0.05-0.20,Bremer & Farley 2010
+PF_canopy_init,0.75,Initial canopy cover fraction (dense plantation) (0-1),0.60-0.90,Nowak & Crane 2002
+PF_base_spread,0.03,Base monthly invasive spread rate,0.01-0.06,Bremer & Farley 2010
+PF_monitoring_radius,8,Spatial monitoring radius per manager agent (m),5-12,expert judgment
+PF_budget_multiplier,1.0,Management cost multiplier,0.8-1.3,expert judgment
+#
+#--- SERVICE TARGET WEIGHTS ------------------------------------------
+# MPS = w_e*Ce + w_r*Cr + w_t*Ct + w_ep*Cep
+# Weights within each service target must sum to 1.0
+#---------------------------------------------------------------------
+conservation_w_e,0.60,Ecological condition weight for conservation target,0.40-0.80,Vogt et al. 2015; Eagles et al. 2002
+conservation_w_r,0.10,Recreation condition weight for conservation target,0.05-0.20,Vogt et al. 2015
+conservation_w_t,0.10,Tourism condition weight for conservation target,0.05-0.20,Vogt et al. 2015
+conservation_w_ep,0.20,Environmental protection weight for conservation target,0.10-0.30,Vogt et al. 2015
+#
+tourism_w_e,0.25,Ecological condition weight for tourism target,0.15-0.40,Eagles et al. 2002
+tourism_w_r,0.15,Recreation condition weight for tourism target,0.10-0.25,Eagles et al. 2002
+tourism_w_t,0.45,Tourism condition weight for tourism target,0.30-0.60,Eagles et al. 2002
+tourism_w_ep,0.15,Environmental protection weight for tourism target,0.05-0.25,Eagles et al. 2002
+#
+recreation_w_e,0.15,Ecological condition weight for recreation target,0.10-0.25,Sreetheran & Van den Bosch 2014
+recreation_w_r,0.55,Recreation condition weight for recreation target,0.40-0.70,Sreetheran & Van den Bosch 2014
+recreation_w_t,0.10,Tourism condition weight for recreation target,0.05-0.20,Sreetheran & Van den Bosch 2014
+recreation_w_ep,0.20,Environmental protection weight for recreation target,0.10-0.30,Sreetheran & Van den Bosch 2014
+#
+environmental_w_e,0.25,Ecological condition weight for environmental target,0.15-0.40,FAO 2016
+environmental_w_r,0.10,Recreation condition weight for environmental target,0.05-0.20,FAO 2016
+environmental_w_t,0.05,Tourism condition weight for environmental target,0.02-0.15,FAO 2016
+environmental_w_ep,0.60,Environmental protection weight for environmental target,0.45-0.75,FAO 2016
+#
+#--- CLIMATE ZONE PARAMETERS -----------------------------------------
+# Climate zone modifiers. Semiarid prefix maps to Semi-arid in model.
+#---------------------------------------------------------------------
+Tropical_invasive_mult,1.75,Invasive spread multiplier (Temperate = 1.0),1.50-2.00,Liu et al. 2023; Lenda et al. 2024
+Tropical_carbon_max_tha,120,Maximum achievable carbon stock (t C/ha),100-150,Nowak & Crane 2002; Jevon et al. 2025
+Tropical_visitor_seas,0.10,Visitor seasonality coefficient (higher = stronger seasonal drop),0.05-0.20,Eagles et al. 2002
+Tropical_drought_stress,0.08,Annual drought canopy loss risk factor,0.02-0.15,IPCC AR6
+Tropical_mgmt_window,12,Effective management months per year,10-12,expert judgment
+Tropical_heat_urgency,0.30,Heat urgency modifier for environmental protection index,0.15-0.45,Schwaab et al. 2021
+Tropical_conflict_amp,2.10,Conflict frequency amplifier (Temperate = 1.0),1.50-2.50,model calibration
+#
+Subtropical_invasive_mult,1.25,Invasive spread multiplier,1.00-1.50,Liu et al. 2023
+Subtropical_carbon_max_tha,95,Maximum achievable carbon stock (t C/ha),75-115,Nowak & Crane 2002
+Subtropical_visitor_seas,0.30,Visitor seasonality coefficient,0.15-0.45,Eagles et al. 2002
+Subtropical_drought_stress,0.18,Annual drought canopy loss risk factor,0.08-0.28,IPCC AR6
+Subtropical_mgmt_window,10,Effective management months per year,9-12,expert judgment
+Subtropical_heat_urgency,0.20,Heat urgency modifier,0.10-0.30,Schwaab et al. 2021
+Subtropical_conflict_amp,1.45,Conflict frequency amplifier,1.20-1.70,model calibration
+#
+Temperate_invasive_mult,1.00,Invasive spread multiplier (baseline),0.85-1.15,baseline reference
+Temperate_carbon_max_tha,75,Maximum achievable carbon stock (t C/ha),60-90,Nowak & Crane 2002
+Temperate_visitor_seas,0.60,Visitor seasonality coefficient,0.45-0.75,Eagles et al. 2002
+Temperate_drought_stress,0.08,Annual drought canopy loss risk factor,0.03-0.15,IPCC AR6
+Temperate_mgmt_window,8,Effective management months per year,6-10,expert judgment
+Temperate_heat_urgency,0.10,Heat urgency modifier,0.05-0.20,Schwaab et al. 2021
+Temperate_conflict_amp,1.00,Conflict frequency amplifier (baseline),0.85-1.15,baseline reference
+#
+Boreal_invasive_mult,0.40,Invasive spread multiplier,0.25-0.55,Lenda et al. 2024
+Boreal_carbon_max_tha,45,Maximum achievable carbon stock (t C/ha),30-60,Nowak & Crane 2002
+Boreal_visitor_seas,0.85,Visitor seasonality coefficient,0.70-0.95,Eagles et al. 2002
+Boreal_drought_stress,0.04,Annual drought canopy loss risk factor,0.01-0.08,IPCC AR6
+Boreal_mgmt_window,5,Effective management months per year,4-7,expert judgment
+Boreal_heat_urgency,0.00,Heat urgency modifier,0.00-0.05,Schwaab et al. 2021
+Boreal_conflict_amp,0.65,Conflict frequency amplifier,0.50-0.80,model calibration
+#
+Semiarid_invasive_mult,0.75,Invasive spread multiplier (drought-limited despite warming),0.55-0.95,Lenda et al. 2024
+Semiarid_carbon_max_tha,50,Maximum achievable carbon stock (t C/ha),35-65,Nowak & Crane 2002
+Semiarid_visitor_seas,0.45,Visitor seasonality coefficient,0.30-0.60,Eagles et al. 2002
+Semiarid_drought_stress,0.45,Annual drought canopy loss risk factor (high),0.30-0.60,IPCC AR6
+Semiarid_mgmt_window,7,Effective management months per year,5-9,expert judgment
+Semiarid_heat_urgency,0.25,Heat urgency modifier,0.15-0.35,Schwaab et al. 2021
+Semiarid_conflict_amp,1.20,Conflict frequency amplifier,1.00-1.40,model calibration
+#
+#--- CONDITION INDEX FORMULA WEIGHTS ---------------------------------
+# Sub-component weights for each of the four condition indices.
+# Weights within each index (Ce / Cr / Ct / Cep) must sum to 1.0
+#---------------------------------------------------------------------
+Ce_w_native,0.50,Weight of native cover fraction in Ce,0.35-0.65,Kowarik 2011; Nagendra & Ostrom 2012
+Ce_w_native_quality,0.30,Weight of invasion-adjusted native quality in Ce,0.20-0.45,Nagendra & Ostrom 2012
+Ce_w_uninvaded,0.20,Weight of non-invaded fraction in Ce,0.10-0.30,Nagendra & Ostrom 2012
+#
+Cr_w_canopy,0.40,Weight of canopy cover in recreation condition index Cr,0.25-0.55,Sreetheran & Van den Bosch 2014
+Cr_w_noninvasive,0.35,Weight of invasion-free quality in Cr,0.20-0.50,Sreetheran & Van den Bosch 2014
+Cr_w_visitor,0.25,Weight of stochastic visitor experience component in Cr,0.10-0.40,model design
+#
+Ct_w_habitat,0.45,Weight of native habitat quality in tourism index Ct,0.30-0.60,Eagles et al. 2002
+Ct_w_canopy,0.30,Weight of canopy aesthetic in Ct,0.20-0.45,Eagles et al. 2002
+Ct_w_visitor,0.25,Weight of stochastic visitor satisfaction in Ct,0.10-0.40,model design
+#
+Cep_w_carbon,0.35,Weight of carbon-scaled canopy in env. protection index Cep,0.25-0.50,Nowak et al. 2016
+Cep_w_native,0.35,Weight of native species cover in Cep,0.25-0.50,Jevon et al. 2025
+Cep_w_density,0.30,Weight of carbon density ratio in Cep,0.15-0.45,Jevon et al. 2025
+#
+#--- MANAGEMENT INTERVENTION PARAMETERS ------------------------------
+# Rates and budget costs per management action cycle.
+#---------------------------------------------------------------------
+invrem_removal_rate,0.08,Fraction of invasive cover removed per action cycle,0.04-0.15,Lenda et al. 2024
+invrem_native_boost,0.30,Fraction of removed invasive area converting to native cover,0.15-0.50,Prober et al. 2019
+invrem_cost,20.0,Budget units consumed per invasive removal cycle,12-30,expert judgment
+#
+ecorest_native_gain,0.04,Native cover gain per ecological restoration cycle,0.02-0.08,Prober et al. 2019
+ecorest_invasive_reduction,0.02,Invasive cover reduction per restoration cycle,0.01-0.04,Prober et al. 2019
+ecorest_cost,15.0,Budget units consumed per restoration cycle,8-22,expert judgment
+#
+infra_recreation_gain,0.05,Recreation index (Cr) improvement per infrastructure cycle,0.02-0.10,Sreetheran & Van den Bosch 2014
+infra_cost,8.0,Budget units consumed per infrastructure cycle,4-15,expert judgment
+#
+visitor_invasive_reduction,0.01,Minor invasive reduction during visitor management cycle,0.005-0.02,expert judgment
+visitor_ct_gain,0.04,Tourism index (Ct) improvement per visitor management cycle,0.02-0.08,Eagles et al. 2002
+visitor_cost,10.0,Budget units consumed per visitor management cycle,5-18,expert judgment
+#
+ecosvc_canopy_gain,0.02,Canopy cover gain per ecosystem service management cycle,0.01-0.04,Nowak et al. 2016
+ecosvc_cep_gain,0.03,Environmental protection index (Cep) gain per cycle,0.01-0.06,Nowak et al. 2016
+ecosvc_cost,8.0,Budget units consumed per ecosystem service cycle,4-15,expert judgment
+#
+#--- ECOLOGICAL PROCESS PARAMETERS -----------------------------------
+#---------------------------------------------------------------------
+eco_invasive_threshold,0.40,Invasive cover fraction triggering CA override and Type B conflict,0.30-0.50,urban forest management literature
+eco_density_self_limit,0.50,Spread rate multiplier when cover exceeds threshold (logistic limit),0.30-0.70,logistic growth theory
+eco_passive_recovery_NRF,0.015,Annual passive native recovery rate for NRF park type,0.008-0.025,Prober et al. 2019
+eco_passive_recovery_other,0.005,Annual passive native recovery rate for NSF / NISF / PF types,0.002-0.010,expert judgment
+eco_carbon_native_advantage,0.38,Carbon storage advantage of native over non-native species (fraction),0.25-0.50,Jevon et al. 2025
+eco_carbon_reference,90.0,Reference carbon stock for Cep index normalization (t C/ha),70-110,Nowak & Crane 2002
+eco_spread_stochastic_min,0.5,Lower bound of uniform stochastic spread multiplier,0.2-0.8,model design
+eco_spread_stochastic_max,1.5,Upper bound of uniform stochastic spread multiplier,1.2-2.0,model design
+eco_passive_canopy_recovery,0.02,Annual rate at which canopy recovers toward park-type equilibrium,0.01-0.05,Nowak & Crane 2002; expert judgment
+eco_init_perturbation_sd,0.03,Standard deviation of Gaussian perturbation applied at initialization,0.01-0.05,model design
+#
+#--- CONFLICT DETECTION PARAMETERS -----------------------------------
+#---------------------------------------------------------------------
+cfl_Ce_threshold,0.45,Ce value below which Type A conflict risk is active,0.35-0.55,model design
+cfl_sat_threshold,0.45,Visitor satisfaction below which Type A conflict risk is active,0.35-0.55,model design
+cfl_stochastic_range,0.03,Uniform noise added to conflict probability each year,0.01-0.05,model design
+cfl_probability_threshold,0.50,Minimum probability to register a conflict event,0.40-0.60,model design
+#
+#--- SOCIAL-ECOLOGICAL COUPLING PARAMETERS ---------------------------
+# Coefficients linking site social/economic data to model dynamics.
+# Site data (gdp_per_capita etc.) are read from the site CSV file.
+#---------------------------------------------------------------------
+soc_visitor_load_baseline,5000,Visitor density (persons/ha/yr) giving full Cr visitor effect,3000-10000,expert judgment
+soc_budget_adequate,100.0,Annual budget (1000 CNY/ha) at which full management effectiveness is achieved,50-200,expert judgment
+soc_visitor_cr_penalty,0.25,Maximum Cr reduction from high visitor pressure,0.10-0.40,Sreetheran & Van den Bosch 2014
+soc_budget_gdp_reference,25000,Reference GDP per capita (USD) for budget scaling,15000-40000,World Bank 2023
+soc_budget_elasticity,0.50,Elasticity of management budget with GDP per capita,0.30-0.80,expert judgment
+soc_regulatory_sensitivity,0.30,Additional conflict probability per unit regulatory strength above 0.5,0.10-0.50,expert judgment
+soc_community_recovery_bonus,0.010,Additional passive recovery rate at full civic participation,0.005-0.020,expert judgment
+soc_community_invasive_reduction,0.005,Invasive reduction per year per unit civic participation,0.002-0.010,expert judgment
+soc_engagement_threshold,0.15,Minimum civic participation to activate community effects,0.05-0.25,expert judgment
+#
+#--- CLIMATE FORCING -> MOVED TO Scenarios/ --------------------------
+# Climate-variability (var_) and climate-extreme disturbance (ext_)
+# parameters define the CLIMATE SCENARIO and now live in separate files
+# in the Scenarios/ folder (e.g. Baseline.csv, RCP45.csv, RCP85.csv).
+# The run script loads a site + a scenario and merges the scenario into
+# these parameter groups at run time, so a park can be simulated under any
+# climate scenario without editing this table or the model code.
+#---------------------------------------------------------------------
+#
+#--- MANAGEMENT PORTFOLIO OPTIMIZATION PARAMETERS --------------------
+# Optional portfolio mode (module B). Instead of one action per year the
+# annual budget is split across actions; the allocation maximising the
+# utility below is chosen. Enable per site by adding management_mode=
+# portfolio (and optionally portfolio_method=random/scipy/fixed) to the
+# Sites CSV. opt_w_* are outcome weights; opt_share_* is the default/seed
+# portfolio; opt_min_/opt_max_ bound each action share.
+# prefix code: opt_
+#---------------------------------------------------------------------
+opt_n_samples,60,Number of random candidate portfolios evaluated per year,20-300,model design
+opt_w_ce,1.00,Utility weight on ecological condition Ce,0.5-2.0,model design
+opt_w_cr,0.50,Utility weight on recreation condition Cr,0.0-1.5,model design
+opt_w_ct,0.50,Utility weight on conservation-target condition Ct,0.0-1.5,model design
+opt_w_cep,0.80,Utility weight on ecosystem-service index Cep,0.0-1.5,model design
+opt_w_sat,0.80,Utility weight on visitor satisfaction,0.0-1.5,model design
+opt_w_invasive,1.00,Utility penalty weight on invasive cover,0.5-2.0,model design
+opt_w_conflict,0.80,Utility penalty weight on conflict proxy,0.0-2.0,model design
+opt_w_cost,0.30,Utility penalty weight on normalized portfolio cost,0.0-1.0,model design
+opt_share_monitoring,0.10,Default portfolio share for monitoring,0.0-1.0,model design
+opt_share_invasive_removal,0.30,Default portfolio share for invasive removal,0.0-1.0,model design
+opt_share_ecological_restoration,0.25,Default portfolio share for ecological restoration,0.0-1.0,model design
+opt_share_infrastructure,0.15,Default portfolio share for infrastructure,0.0-1.0,model design
+opt_share_visitor_experience,0.00,Default portfolio share for visitor experience,0.0-1.0,model design
+opt_share_ecosystem_service,0.20,Default portfolio share for ecosystem service,0.0-1.0,model design
+opt_min_monitoring,0.00,Minimum allowed share for monitoring,0.0-0.3,model design
+opt_max_monitoring,0.40,Maximum allowed share for monitoring,0.1-0.6,model design
+opt_min_invasive_removal,0.00,Minimum allowed share for invasive removal,0.0-0.3,model design
+opt_max_invasive_removal,0.70,Maximum allowed share for invasive removal,0.3-1.0,model design
+opt_min_ecological_restoration,0.00,Minimum allowed share for ecological restoration,0.0-0.3,model design
+opt_max_ecological_restoration,0.60,Maximum allowed share for ecological restoration,0.2-0.9,model design
+opt_min_infrastructure,0.00,Minimum allowed share for infrastructure,0.0-0.3,model design
+opt_max_infrastructure,0.50,Maximum allowed share for infrastructure,0.2-0.8,model design
+opt_min_visitor_experience,0.00,Minimum allowed share for visitor experience,0.0-0.3,model design
+opt_max_visitor_experience,0.40,Maximum allowed share for visitor experience,0.1-0.7,model design
+opt_min_ecosystem_service,0.00,Minimum allowed share for ecosystem service,0.0-0.3,model design
+opt_max_ecosystem_service,0.50,Maximum allowed share for ecosystem service,0.2-0.8,model design
+#
+#--- EARLY-WARNING / RESILIENCE DIAGNOSIS PARAMETERS -----------------
+# Post-processing diagnostics (module C) computed from the simulated
+# annual series. Rolling-window critical-slowing-down indicators are
+# scored into a warning level: stable/watch/warning/critical.
+# prefix code: ew_
+#---------------------------------------------------------------------
+ew_window,10,Rolling-window length in years for trend/variance/autocorrelation,5-25,Dakos et al. 2012
+ew_ce_fail,0.50,Final Ce below which the ecological state is deemed failing,0.40-0.60,model design
+ew_invasive_threshold,0.40,Invasive cover defining a threshold crossing,0.30-0.50,urban forest management literature
+ew_consecutive_years,5,Consecutive years above invasive threshold defining persistence,3-10,model design
+ew_ce_trend_slope,-0.002,Ce slope per year below which Ce is judged to be declining,-0.010 to 0.0,model design
+ew_var_ratio,1.20,Late/early Ce variance ratio above which variance is judged rising,1.05-2.00,Dakos et al. 2012
+ew_ac_threshold,0.50,Lag-1 autocorrelation above which slowing-down is flagged,0.30-0.80,Scheffer et al. 2009
+ew_conflict_rate_warn,0.50,Conflict rate above which a rising-conflict flag activates,0.30-0.80,model design
+ew_watch_score,1,Indicator score at/above which level is at least watch,1-2,model design
+ew_warning_score,3,Indicator score at/above which level is at least warning,2-4,model design
+ew_critical_score,5,Indicator score at/above which level is critical,4-6,model design
+ew_canopy_low,0.30,Final canopy cover below which a canopy-collapse flag is raised,0.20-0.40,this study
+
+#--- Landscape coupling (lsc_), used when Landscape_descriptors.csv is present ---
+lsc_edge_spread,0.60,Extra invasive spread in the edge zone per unit of edge exposure
+lsc_edge_disturbance,0.50,Extra acute disturbance damage in the edge zone
+lsc_diffusion,0.05,Annual inward leakage of invasive cover from edge to core
+lsc_propagule_scale,0.004,Propagule arrival from a built and broken surrounding matrix
+lsc_workload_exponent,0.50,Exponent on canopy edge per staff member; 0 disables workload dilution
+lsc_access_exponent,0.50,Exponent on the vehicle access penalty
+lsc_division_weight,0.30,Loss of removal durability on a fragmented canopy
+lsc_edge_priority,0.50,Steering of invasive removal toward the more invaded zone
+lsc_canopy_edge_reference,230.0,Reference canopy edge density (m/ha) taken from Beijing
+lsc_edge_per_staff_reference,440.0,Reference canopy edge per staff member (m) taken from Beijing
+lsc_vehicle_reference,65.0,Reference vehicle road density (m/ha) taken from Beijing

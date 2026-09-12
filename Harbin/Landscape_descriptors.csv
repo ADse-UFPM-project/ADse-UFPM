@@ -1,0 +1,15 @@
+#--- Landscape descriptors, from ADse-UFPM_Landscape.py ---
+# Scene S2A_MSIL2A_20250814T023131_R046_T51TYL_20250814T072515, 2025-08-14.
+park_area,95.2,ha,Measured from the boundary polygon
+edge_density,71.5,m/ha,Park outline only
+shape_index,1.97,,1.0 for a circle
+edge_fraction,0.639,,Share of the park within 100 m of the boundary
+canopy_observed,0.870,,Share of the park with ndvi above 0.7
+canopy_edge_density,199.7,m/ha,All canopy edge including internal gaps
+division_index,0.008,,0 for one unbroken canopy patch
+largest_patch,0.866,,Largest canopy patch as a share of the park
+core_canopy_30,0.506,,Canopy deeper than 30 m inside a patch
+matrix_built,0.367,,Built share of the 1000 m ring around the park
+access_density,215.1,m/ha,Roads and paths inside the park
+vehicle_density,111.4,m/ha,Vehicle-usable roads only
+edge_per_staff,317,m,Canopy edge divided by permanent staff

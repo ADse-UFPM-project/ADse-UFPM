@@ -1,0 +1,66 @@
+var,value,units,detail
+#=======================================================================
+# Site configuration: Harbin Urban Forest Park
+# UFPM-SMF input file
+# Sources: Heilongjiang Forest Botanical Garden Administration;
+#          Harbin Bureau of Statistics 2023;
+#          China Meteorological Administration
+#=======================================================================
+#
+#--- Site identity ---
+site_id,Harbin_PF,,Unique identifier used for output folder naming
+site_name,Harbin Urban Forest Park,,Official park name (Chinese: Haerbin Chengshi Senlin Gongyuan; also Heilongjiang Forest Botanical Garden)
+city,Harbin,,City (Heilongjiang Province capital)
+country,China,,Country
+#
+#--- Park configuration ---
+park_type,PF,,Plantation Forest - predominantly conifer plantation transitioning to mixed broadleaf-conifer forest
+service_target,environmental,,Primary service target: environmental protection (carbon sink and air filtration)
+climate_zone,Boreal,,Cold continental sub-boreal climate (Koppen: Dwb/Dwc)
+#
+#--- Simulation settings ---
+n_years,100,yr,Simulation duration
+n_reps,30,,Number of stochastic replicates
+seed,2024,,Master random seed for reproducibility
+budget,70.0,,Annual management budget units (scaled; see budget_annual below)
+n_managers,2,,Number of management staff (limited staffing in northeastern China)
+#
+#--- Park physical characteristics ---
+park_area,95.2,ha,Measured from the corrected boundary polygon
+established_year,1958,yr,Year of original establishment (designated national forest park in 1992)
+management_staff,60,persons,Permanent management and forestry staff
+budget_annual,1100000,USD/yr,Estimated annual management budget
+native_species_count,47,species,Documented native plant species (cold-adapted; lower diversity)
+invasive_species_count,9,species,Documented invasive plant species (limited by cold climate)
+#
+#--- Climate data (30-year normals 1991-2020) ---
+mean_temp,3.5,degC,Mean annual temperature
+temp_min,-18.0,degC,Mean temperature in coldest month (January)
+temp_max,23.0,degC,Mean temperature in hottest month (July)
+temp_sd,14.8,degC,Standard deviation of monthly mean temperatures (high - continental extreme)
+annual_precip,530,mm/yr,Mean annual total precipitation (mostly summer-concentrated)
+precip_cv,0.42,,Coefficient of variation of monthly precipitation
+precip_min_month,5,mm,Mean precipitation in driest month (January - falls as snow)
+precip_max_month,148,mm,Mean precipitation in wettest month (July)
+relative_humidity,65,%,Mean annual relative humidity
+wind_speed,3.8,m/s,Mean annual wind speed (higher - exposed northeastern plain)
+sunshine_hours,2641,hr/yr,Annual sunshine duration
+frost_days,195,days/yr,Mean number of frost days per year (October to April)
+snow_cover_days,120,days/yr,Mean number of days with continuous snow cover
+#
+#--- Social and economic data (2023 estimates) ---
+urban_population,10.9,million,City total registered population
+population_density,430,persons/km2,Urban core average population density (lower - northeastern China)
+gdp_per_capita,8500,USD,GDP per capita 2023 (60087 CNY at 7.1 CNY/USD; Harbin Bureau of Statistics 2023)
+avg_household_income,16000,USD/yr,Mean urban household annual disposable income
+education_level,12.2,yr,Mean years of education (urban adult population)
+civic_participation,0.20,,Fraction of population engaged in civic or volunteer activities
+#
+#--- Visitor and access data ---
+park_visitors_annual,1500000,persons/yr,Estimated annual visitor count (strong seasonality - summer peak)
+park_visitor_density,11029,persons/ha/yr,Annual visitor density (visitors / park area)
+peak_daily_visitors,15000,persons/day,Estimated peak daily visitors (summer weekends)
+transit_access,0.55,,Fraction of visitors arriving by public transport
+#
+#--- Notes ---
+notes,Harbin Urban Forest Park (also commonly named Heilongjiang Forest Botanical Garden, Chinese: Haerbin Chengshi Senlin Gongyuan / Heilongjiang Sheng Senlin Zhiwuyuan) is a 136 ha forest park located in Xiangfang District of Harbin city. It is the only national-level forest park situated inside the built urban area of a Chinese city (designated 1992) and was originally established in 1958 as a forestry research base. The park is predominantly a planted conifer stand of Pinus sylvestris var. mongolica and Larix gmelinii that is gradually transitioning toward mixed native broadleaf-conifer forest as cohorts age. The cold continental climate (mean annual temperature 3.5 degC; January average -18 degC) limits the effective management window to approximately 5 months per year and suppresses invasive species pressure. Limited municipal funding relative to southern China cities constrains management capacity. A key long-term management goal is facilitating succession from monoculture plantation to diverse native mixed forest within an urban setting.

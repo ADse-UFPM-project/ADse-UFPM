@@ -1,0 +1,2 @@
+﻿site_id,warning_level,score,final_Ce,final_invasive,final_canopy,final_conflict_rate,ce_trend_slope,ce_variance_ratio,ce_lag1_autocorr,invasive_years_over_threshold,max_consecutive_invasive_over,conflict_trend_slope,flag_ce_declining,flag_variance_rising,flag_autocorr_high,flag_invasive_persistent,flag_conflict_rising,flag_ce_below_fail,flag_canopy_collapse
+Harbin_PF,critical,6,0.138,0.472,0.0132,0.7433,-0.00241,21.9979,0.1067,68,68,0.00222,1,1,0,1,1,1,1

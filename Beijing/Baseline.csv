@@ -1,0 +1,65 @@
+para_name,value,detail,range,reference
+#=======================================================================
+# Climate scenario: BASELINE (stationary present-day climate)
+# ADse-UFPM scenario input. Defines the climate forcing of a run:
+#   var_ = stochastic climate variability and warming trend
+#   ext_ = climate-extreme disturbance regime (events + damage)
+# This file is merged into the parameter set by the run script. The model
+# itself holds no climate-scenario values. Copy and edit to make your own.
+# BASELINE = no long-term warming, stationary extreme-event frequencies.
+#=======================================================================
+#
+#--- CLIMATE VARIABILITY ---------------------------------------------
+var_temp_anomaly_sd,0.8,SD of annual temperature anomaly (degC),0.4-1.5,IPCC AR6
+var_precip_anomaly_sd,0.15,SD of annual precipitation anomaly (fraction of mean),0.08-0.25,IPCC AR6
+var_warming_rate,0.0,Linear warming trend (degC/yr); 0 = stationary baseline,0.0-0.05,IPCC AR6
+var_invasive_temp_sensitivity,0.05,Extra invasive spread multiplier per degC above baseline,0.02-0.10,Lenda et al. 2024
+var_canopy_precip_sensitivity,0.02,Annual canopy change per fractional precip anomaly,0.01-0.04,Nowak & Crane 2002
+var_drought_threshold,0.10,Negative precip anomaly beyond which canopy drought stress begins,0.05-0.20,IPCC AR6
+#
+#--- DISTURBANCE: MODULE CONTROL -------------------------------------
+ext_enable,1,Master switch for the disturbance module (1=on 0=off),0-1,model design
+ext_warming_freq_trend,0.000,Annual additive rise in every event probability under warming (0=stationary),0.000-0.010,IPCC AR6
+ext_intensity_min,0.30,Lower bound of uniform event-intensity draw,0.10-0.50,model design
+ext_intensity_max,1.00,Upper bound of uniform event-intensity draw,0.80-1.00,model design
+#
+#--- DISTURBANCE: CLIMATE-ZONE COUPLINGS -----------------------------
+ext_heat_zone_coupling,0.15,Heatwave probability gain per unit climate-zone heat urgency,0.05-0.30,model design
+ext_drought_zone_coupling,0.20,Drought probability gain per unit climate-zone drought stress,0.05-0.40,model design
+ext_pest_zone_coupling,0.02,Pest probability gain per unit climate-zone invasive multiplier,0.00-0.06,model design
+#
+#--- DISTURBANCE: HEATWAVE -------------------------------------------
+ext_heatwave_freq,0.06,Base annual probability of a heatwave event,0.04-0.25,IPCC AR6; Marchin et al. 2022
+ext_heatwave_temp_sensitivity,0.12,Extra heatwave probability per degC positive temp anomaly,0.05-0.25,IPCC AR6
+ext_canopy_loss_heatwave,0.04,Canopy loss per unit heatwave intensity,0.02-0.12,Marchin et al. 2022
+ext_satisfaction_loss_heatwave,0.10,Satisfaction loss per unit heatwave intensity,0.05-0.20,Eagles et al. 2002
+#
+#--- DISTURBANCE: DROUGHT --------------------------------------------
+ext_drought_freq,0.08,Base annual probability of a drought event,0.05-0.30,IPCC AR6
+ext_drought_precip_sensitivity,0.50,Extra drought probability per unit negative precip anomaly,0.20-0.90,IPCC AR6
+ext_canopy_loss_drought,0.05,Canopy loss per unit drought intensity,0.03-0.15,Allen et al. 2010
+ext_native_loss_drought,0.005,Native loss per unit drought intensity,0.00-0.04,Allen et al. 2010
+ext_satisfaction_loss_drought,0.06,Satisfaction loss per unit drought intensity,0.02-0.12,expert judgment
+#
+#--- DISTURBANCE: HEAVY RAIN / FLOOD ---------------------------------
+ext_heavy_rain_freq,0.08,Base annual probability of an extreme rainfall/flood event,0.05-0.30,IPCC AR6
+ext_heavy_rain_precip_sensitivity,0.50,Extra rainfall-event probability per unit positive precip anomaly,0.20-0.90,IPCC AR6
+ext_canopy_loss_flood,0.02,Canopy loss per unit flood intensity,0.00-0.08,expert judgment
+ext_infra_pressure_flood,0.05,Cr penalty per unit flood intensity (infrastructure pressure),0.02-0.12,Berland et al. 2017
+#
+#--- DISTURBANCE: STORM ----------------------------------------------
+ext_storm_prob,0.05,Base annual probability of a storm-damage event,0.03-0.20,IPCC AR6
+ext_canopy_loss_storm,0.09,Canopy loss per unit storm intensity,0.06-0.25,Seidl et al. 2017
+ext_extra_cost_storm,12.0,Extra budget units for cleanup per unit storm intensity,5-25,expert judgment
+ext_conflict_storm,0.06,Extra conflict probability per unit storm intensity,0.00-0.15,model design
+#
+#--- DISTURBANCE: PEST / DISEASE -------------------------------------
+ext_pest_prob,0.05,Base annual probability of a pest/disease outbreak,0.03-0.20,Tobin 2015
+ext_pest_temp_sensitivity,0.05,Extra pest probability per degC positive temp anomaly,0.02-0.12,Tobin 2015
+ext_canopy_loss_pest,0.03,Canopy loss per unit pest intensity,0.02-0.12,Tobin 2015
+ext_native_loss_pest,0.03,Native loss per unit pest intensity,0.02-0.10,Tobin 2015
+ext_conflict_pest,0.12,Extra conflict probability per unit pest intensity,0.00-0.25,model design
+#
+#--- DISTURBANCE: GAP COLONISATION & RECOVERY ------------------------
+ext_invasive_gap_gain,0.02,Invasive colonisation of disturbance gaps per unit storm+pest intensity,0.00-0.06,Vila et al. 2011
+ext_recovery_rate,0.06,Annual post-disturbance canopy regrowth toward park-type equilibrium,0.02-0.12,Nowak & Crane 2002

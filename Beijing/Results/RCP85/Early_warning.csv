@@ -1,0 +1,2 @@
+﻿site_id,warning_level,score,final_Ce,final_invasive,final_canopy,final_conflict_rate,ce_trend_slope,ce_variance_ratio,ce_lag1_autocorr,invasive_years_over_threshold,max_consecutive_invasive_over,conflict_trend_slope,flag_ce_declining,flag_variance_rising,flag_autocorr_high,flag_invasive_persistent,flag_conflict_rising,flag_ce_below_fail,flag_canopy_collapse
+Beijing_NSF,watch,2,0.7565,0.4049,0.0162,0.6367,-0.0008,0.0101,-0.6439,62,23,-0.00384,0,0,0,1,0,0,1

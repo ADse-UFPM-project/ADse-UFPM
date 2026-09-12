@@ -1,0 +1,64 @@
+var,value,units,detail
+#=======================================================================
+# Site configuration: Longquan Mountain Urban Forest Park - Chengdu
+# UFPM-TS-ABM input file
+# Sources: Chengdu Urban Forest Strategy 2017; Chengdu Bureau of
+#          Statistics 2023; China Meteorological Administration
+#=======================================================================
+#
+#--- Site identity ---
+site_id,Chengdu_NRF,,Unique identifier used for output folder naming
+site_name,Longquan Mountain Urban Forest Park,,Official park name (Chinese: Longquan Shan Chengshi Senlin Gongyuan)
+city,Chengdu,,City (Sichuan Province capital)
+country,China,,Country
+#
+#--- Park configuration ---
+park_type,NRF,,Naturally Regenerated Forest - subtropical mixed broadleaf succession
+service_target,conservation,,Primary service target: biodiversity conservation and ecological restoration
+climate_zone,Subtropical,,Humid subtropical climate (Koppen: Cfa/Cwa transitional)
+#
+#--- Simulation settings ---
+n_years,100,yr,Simulation duration
+n_reps,30,,Number of stochastic replicates
+seed,2024,,Master random seed for reproducibility
+budget,90.0,,Annual management budget units (scaled; see budget_annual below)
+n_managers,3,,Number of manager agents
+#
+#--- Park physical characteristics ---
+park_area,36572.1,ha,Core ecological conservation zone, 365.7 km2
+established_year,2017,yr,Year of formal park establishment under Chengdu 2035 Plan
+management_staff,180,persons,Permanent management and ecological monitoring staff
+budget_annual,5200000,USD/yr,Estimated annual management budget for core zone
+native_species_count,142,species,Documented native plant species (high subtropical diversity)
+invasive_species_count,18,species,Documented invasive plant species (Ageratina adenophora and Alternanthera philoxeroides present)
+#
+#--- Climate data (30-year normals 1991-2020) ---
+mean_temp,16.4,degC,Mean annual temperature
+temp_min,5.8,degC,Mean temperature in coldest month (January)
+temp_max,25.2,degC,Mean temperature in hottest month (July)
+temp_sd,6.9,degC,Standard deviation of monthly mean temperatures
+annual_precip,900,mm/yr,Mean annual total precipitation
+precip_cv,0.28,,Coefficient of variation of monthly precipitation
+precip_min_month,12,mm,Mean precipitation in driest month (January)
+precip_max_month,225,mm,Mean precipitation in wettest month (July)
+relative_humidity,80,%,Mean annual relative humidity (Sichuan Basin fog-prone)
+wind_speed,1.3,m/s,Mean annual wind speed (low - sheltered basin)
+sunshine_hours,1152,hr/yr,Annual sunshine duration (low - persistent cloud cover)
+frost_days,15,days/yr,Mean number of frost days per year
+#
+#--- Social and economic data (2023 estimates) ---
+urban_population,21.0,million,City total registered population
+population_density,1100,persons/km2,Urban core average population density
+gdp_per_capita,14700,USD,GDP per capita 2023 (104692 CNY at 7.1 CNY/USD; Chengdu Bureau of Statistics 2023)
+avg_household_income,28000,USD/yr,Mean urban household annual disposable income
+education_level,12.8,yr,Mean years of education (urban adult population)
+civic_participation,0.22,,Fraction of population engaged in civic or volunteer activities
+#
+#--- Visitor and access data ---
+park_visitors_annual,3500000,persons/yr,Estimated annual visitor count (park still developing)
+park_visitor_density,7000,persons/ha/yr,Annual visitor density (visitors / core area)
+peak_daily_visitors,25000,persons/day,Estimated peak daily visitors
+transit_access,0.50,,Fraction of visitors arriving by public transport (car-dependent location)
+#
+#--- Notes ---
+notes,Longquan Mountain Urban Forest Park is part of Chengdu's ambitious 2035 Urban Plan to create a major ecological corridor east of the city. The core managed forest (500 ha representative zone) features naturally regenerating subtropical broadleaf species on former agricultural and marginal land. Key challenges include managing successional dynamics with invasive Mikania micrantha and Lantana camara, low sunlight due to basin cloud cover reducing management effectiveness, and balancing conservation with increasing visitor pressure as the park matures.

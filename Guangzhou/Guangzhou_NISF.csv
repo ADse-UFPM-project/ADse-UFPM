@@ -1,0 +1,65 @@
+var,value,units,detail
+#=======================================================================
+# Site configuration: Baiyun Mountain Scenic Area - Guangzhou
+# UFPM-TS-ABM input file
+# Sources: Guangzhou Baiyun Mountain Administration Bureau 2022;
+#          Guangzhou Bureau of Statistics 2023;
+#          China Meteorological Administration
+#=======================================================================
+#
+#--- Site identity ---
+site_id,Guangzhou_NISF,,Unique identifier used for output folder naming
+site_name,Baiyun Mountain Scenic Area,,Official park name (Chinese: Baiyun Shan Fengjing Mingsheng Qu)
+city,Guangzhou,,City (Guangdong Province capital)
+country,China,,Country
+#
+#--- Park configuration ---
+park_type,NISF,,Non-native/Invasive Species Forest - significant invasive species dominance
+service_target,environmental,,Primary service target: environmental protection and air quality regulation
+climate_zone,Subtropical,,South subtropical climate - humid, warm year-round (Koppen: Cwa)
+#
+#--- Simulation settings ---
+n_years,100,yr,Simulation duration
+n_reps,30,,Number of stochastic replicates
+seed,2024,,Master random seed for reproducibility
+budget,100.0,,Annual management budget units (scaled; see budget_annual below)
+n_managers,3,,Number of manager agents (large area divided into management zones)
+#
+#--- Park physical characteristics ---
+park_area,1888.6,ha,Measured from the corrected boundary polygon
+established_year,1984,yr,Year of formal scenic area designation (modern management era)
+management_staff,420,persons,Permanent management and ranger staff
+budget_annual,6800000,USD/yr,Estimated annual management budget
+native_species_count,118,species,Documented native plant species
+invasive_species_count,41,species,Documented invasive plant species (Mikania micrantha and Lantana camara dominant)
+#
+#--- Climate data (30-year normals 1991-2020) ---
+mean_temp,22.0,degC,Mean annual temperature
+temp_min,13.5,degC,Mean temperature in coldest month (January)
+temp_max,29.0,degC,Mean temperature in hottest month (July)
+temp_sd,4.8,degC,Standard deviation of monthly mean temperatures (low - warm year-round)
+annual_precip,1700,mm/yr,Mean annual total precipitation
+precip_cv,0.35,,Coefficient of variation of monthly precipitation
+precip_min_month,25,mm,Mean precipitation in driest month (December)
+precip_max_month,310,mm,Mean precipitation in wettest month (June)
+relative_humidity,77,%,Mean annual relative humidity
+wind_speed,2.1,m/s,Mean annual wind speed
+sunshine_hours,1820,hr/yr,Annual sunshine duration
+frost_days,0,days/yr,Frost-free city
+#
+#--- Social and economic data (2023 estimates) ---
+urban_population,18.7,million,City total registered population
+population_density,1784,persons/km2,Urban core average population density
+gdp_per_capita,24000,USD,GDP per capita (converted from CNY at 7.1 CNY/USD)
+avg_household_income,36000,USD/yr,Mean urban household annual disposable income
+education_level,13.5,yr,Mean years of education (urban adult population)
+civic_participation,0.25,,Fraction of population engaged in civic or volunteer activities
+#
+#--- Visitor and access data ---
+park_visitors_annual,20000000,persons/yr,Documented annual visitor count (one of most visited parks in China)
+park_visitor_density,6947,persons/ha/yr,Annual visitor density (visitors / park area)
+peak_daily_visitors,120000,persons/day,Estimated peak daily visitors (holiday periods)
+transit_access,0.70,,Fraction of visitors arriving by public transport
+#
+#--- Notes ---
+notes,Baiyun Mountain (2879 ha) is one of the most visited urban forests in China and a designated national scenic area. Invasive species - particularly Mikania micrantha (mile-a-minute weed) and Lantana camara - are severe management challenges owing to the warm humid year-round climate that enables rapid spread. The park serves a critical environmental protection function for Guangzhou as urban green lungs. High visitor pressure combined with severe invasive encroachment creates persistent management conflicts between conservation and access goals.

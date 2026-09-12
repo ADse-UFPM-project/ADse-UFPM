@@ -1,0 +1,2 @@
+﻿site_id,warning_level,score,final_Ce,final_invasive,final_canopy,final_conflict_rate,ce_trend_slope,ce_variance_ratio,ce_lag1_autocorr,invasive_years_over_threshold,max_consecutive_invasive_over,conflict_trend_slope,flag_ce_declining,flag_variance_rising,flag_autocorr_high,flag_invasive_persistent,flag_conflict_rising,flag_ce_below_fail,flag_canopy_collapse
+Chengdu_NRF,critical,3,0.2697,0.9508,0.3196,1.0,-0.00024,0.0005,-0.0348,99,99,0.0,0,0,0,1,1,1,0
