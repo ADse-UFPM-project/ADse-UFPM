@@ -1,25 +1,44 @@
 # -*- coding: utf-8 -*-
-"""ADse-UFPM park-scale social-ecological simulation model.
+"""
+ADse-UFPM.py
+Adaptive Socio-Ecological Urban Forest Management (ADse-UFPM) Framework
 
-The model advances at an annual time step. Climate forcing is loaded from a
-scenario file, while park, management, and social parameters are supplied by
-the shared parameter table and the site configuration.
+Core simulation routines for a park-scale, annual time-step coupled
+social-ecological model. Provides the four functional process modules
+(management, visitor, community, regulatory), the annual simulation
+loop, the replicate runner, sensitivity-analysis drivers, and the
+site-level orchestration used by the run script.
+
+Climate forcing (stochastic variability, warming, and the climate-extreme
+disturbance regime) is not hardcoded; it is supplied by a scenario file in the
+Scenarios/ folder via load_scenario()/apply_scenario().
+
+Created on 2026-03-19
+Updated 2026-06-06
+@author Xinyuan Wei
 """
 
-import csv
 import json
 import os
 import time
 import urllib.parse
 import urllib.request
-import warnings
-from copy import deepcopy
-
 import numpy as np
 import pandas as pd
-
-__author__ = "Xinyuan Wei"
-
+import geopandas as gpd
+import planetary_computer as pc
+import pystac_client
+import rasterio
+from rasterio.features import rasterize
+from rasterio.warp import transform_bounds
+from rasterio.windows import from_bounds
+from scipy import ndimage
+from shapely.geometry import LineString
+from shapely.ops import unary_union
+landscape_tools = True #False
+#----------------------------------------------------------------------------
+# Action vocabulary
+#----------------------------------------------------------------------------
 action_order = ['monitoring', 'invasive_removal', 'ecological_restoration',
                 'infrastructure', 'visitor_experience', 'ecosystem_service']
 
@@ -32,15 +51,20 @@ action_labels = {
     'ecosystem_service':      'Ecosystem service',
 }
 
-
+#----------------------------------------------------------------------------
+# Section 1: Input loaders
+#----------------------------------------------------------------------------
 def load_params(paras_path):
-    """Load the prefixed parameter table used by the model."""
-    df = pd.read_csv(paras_path)
-    required = {'para_name', 'value'}
-    missing = required.difference(df.columns)
-    if missing:
-        names = ', '.join(sorted(missing))
-        raise ValueError(f"Parameter file is missing column(s): {names}")
+    """
+    Load parameters from CSV with prefix-based naming scheme.
+
+    Returns dict with keys:
+        park_type_params, service_target_weights, climate_params,
+        ci_weights, intervention, ecology, conflict,
+        social_coupling, climate_variability,
+        disturbance, optimization, early_warning.
+    """
+    df = pd.read_csv(paras_path, comment='#')
 
     result = {
         'park_type_params': {},
@@ -82,25 +106,12 @@ def load_params(paras_path):
         (('lsc_',), 'landscape'),
     ]
 
-    for row_number, row in df.iterrows():
-        raw_name = row['para_name']
-        if pd.isna(raw_name):
-            continue
-        para_name = str(raw_name).strip()
-        if not para_name:
-            continue
+    for _, row in df.iterrows():
+        para_name = row['para_name'].strip()
         try:
             value = float(row['value'])
-        except (ValueError, TypeError) as exc:
-            raise ValueError(
-                f"Invalid value for parameter {para_name!r} "
-                f"at row {row_number + 2}: {row['value']!r}"
-            ) from exc
-        if not np.isfinite(value):
-            raise ValueError(
-                f"Non-finite value for parameter {para_name!r} "
-                f"at row {row_number + 2}"
-            )
+        except (ValueError, TypeError):
+            continue
 
         matched = False
 
@@ -143,7 +154,15 @@ def load_params(paras_path):
 
 
 def load_site_config(site_path):
-    """Load a site configuration with columns ``var`` and ``value``."""
+    """
+    Load a site configuration file (csv, columns: var, value, units, detail).
+
+    Splits each line on the first comma only so that detail fields that
+    themselves contain commas do not break the reader. Returns a dict
+    with required keys park_type, service_target, climate_zone, plus the
+    optional numeric and string keys present in the file. String keys such
+    as management_mode and portfolio_method are retained as-is.
+    """
     numeric_keys = {
         'n_years', 'n_reps', 'n_managers', 'seed', 'budget',
         'park_area', 'gdp_per_capita', 'civic_participation',
@@ -156,38 +175,26 @@ def load_site_config(site_path):
     int_keys = {'n_years', 'n_reps', 'n_managers', 'seed'}
 
     config = {}
-    with open(site_path, encoding='utf-8-sig', newline='') as fh:
-        for row_number, row in enumerate(csv.reader(fh), start=1):
-            if not row or not row[0].strip() or row[0].lstrip().startswith('#'):
+    with open(site_path, encoding='utf-8-sig') as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith('#'):
                 continue
-            if len(row) < 2:
+            parts = line.split(',', 1)
+            if len(parts) < 2:
                 continue
-            key = row[0].strip()
+            key = parts[0].strip()
             if key == 'var':
                 continue
-            value_str = row[1].strip()
+            value_str = parts[1].split(',')[0].strip()
             if not value_str or value_str.startswith('#'):
                 continue
             if key in numeric_keys:
                 try:
-                    number = float(value_str)
-                except (ValueError, TypeError) as exc:
-                    raise ValueError(
-                        f"Invalid numeric value for {key!r} at row {row_number}: "
-                        f"{value_str!r}"
-                    ) from exc
-                if not np.isfinite(number):
-                    raise ValueError(
-                        f"Non-finite value for {key!r} at row {row_number}"
-                    )
-                if key in int_keys:
-                    if not number.is_integer():
-                        raise ValueError(
-                            f"{key!r} must be an integer at row {row_number}"
-                        )
-                    config[key] = int(number)
-                else:
-                    config[key] = number
+                    config[key] = (int(float(value_str))
+                                   if key in int_keys else float(value_str))
+                except (ValueError, TypeError):
+                    pass
             else:
                 config[key] = value_str
 
@@ -196,9 +203,11 @@ def load_site_config(site_path):
             raise ValueError(f"Site config missing required key: {req}")
     return config
 
-
 def load_landscape(site_dir, site_cfg=None):
-    """Load measured landscape descriptors, with site overrides if supplied."""
+    # Read Landscape_descriptors.csv from a site folder, written by
+    # ADse-UFPM_Landscape.py. Values already present in the site config win,
+    # so a park can be tuned by hand. Returns None when nothing is available,
+    # which makes the model fall back to the original non-spatial behaviour.
     keys = ("park_area", "edge_density", "shape_index", "edge_fraction",
             "canopy_observed", "canopy_edge_density", "division_index",
             "largest_patch", "core_canopy_30", "matrix_built",
@@ -206,24 +215,18 @@ def load_landscape(site_dir, site_cfg=None):
     found = {}
     path = os.path.join(str(site_dir), "Landscape_descriptors.csv")
     if os.path.exists(path):
-        with open(path, encoding="utf-8-sig", newline='') as fh:
-            for row_number, row in enumerate(csv.reader(fh), start=1):
-                if not row or not row[0].strip() or row[0].lstrip().startswith('#'):
+        with open(path, encoding="utf-8-sig") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#"):
                     continue
-                key = row[0].strip()
-                if len(row) < 2 or key not in keys:
+                parts = line.split(",")
+                if len(parts) < 2 or parts[0].strip() not in keys:
                     continue
                 try:
-                    value = float(row[1])
-                except (ValueError, TypeError) as exc:
-                    raise ValueError(
-                        f"Invalid landscape value for {key!r} at row {row_number}"
-                    ) from exc
-                if not np.isfinite(value):
-                    raise ValueError(
-                        f"Non-finite landscape value for {key!r} at row {row_number}"
-                    )
-                found[key] = value
+                    found[parts[0].strip()] = float(parts[1])
+                except (ValueError, TypeError):
+                    pass
     if site_cfg:
         for key in keys:
             if key in site_cfg:
@@ -232,44 +235,39 @@ def load_landscape(site_dir, site_cfg=None):
 
 
 def landscape_terms(lsc, params):
-    """Convert measured descriptors to factors used by the annual model."""
-    ls = params.get("landscape", {})
+    # Turn the measured descriptors into the dimensionless terms the annual
+    # loop uses. Every term is 1.0, or 0.0 where additive, when the landscape
+    # parameters are left at their neutral defaults, so version 1 is recovered.
+    ls = params["landscape"]
     if not lsc:
         return {"edge_fraction": 0.0, "kappa": 0.0, "propagule": 0.0,
                 "workload": 1.0, "removal_scale": 1.0, "disturb_edge": 1.0}
 
-    fraction_keys = (
-        "edge_fraction", "canopy_observed", "division_index",
-        "largest_patch", "core_canopy_30", "matrix_built",
-    )
-    for key in fraction_keys:
-        if key in lsc and not 0.0 <= lsc[key] <= 1.0:
-            raise ValueError(f"Landscape descriptor {key!r} must be in [0, 1]")
-    for key in ("canopy_edge_density", "edge_per_staff", "vehicle_density"):
-        if key in lsc and lsc[key] < 0:
-            raise ValueError(f"Landscape descriptor {key!r} must be non-negative")
+    edge_ref = ls.get("lsc_canopy_edge_reference", 230.0)
+    staff_ref = ls.get("lsc_edge_per_staff_reference", 440.0)
+    vehicle_ref = ls.get("lsc_vehicle_reference", 65.0)
 
-    edge_ref = float(ls.get("lsc_canopy_edge_reference", 230.0))
-    staff_ref = float(ls.get("lsc_edge_per_staff_reference", 440.0))
-    vehicle_ref = float(ls.get("lsc_vehicle_reference", 65.0))
-    if min(edge_ref, staff_ref, vehicle_ref) <= 0:
-        raise ValueError("Landscape reference values must be positive")
-
+    # Edge exposure: how much canopy edge there is, and how hostile the ground
+    # beyond it is. Canopy edge is used, not the park outline, because internal
+    # gaps carry most of the edge in every park measured so far.
     kappa = (lsc.get("canopy_edge_density", edge_ref) / edge_ref
              * lsc.get("matrix_built", 0.3))
 
-    propagule = max(
-        0.0,
-        ls.get("lsc_propagule_scale", 0.0)
-        * lsc.get("matrix_built", 0.3)
-        * (1.0 - lsc.get("largest_patch", 1.0)),
-    )
+    # Propagule pressure rises with a hostile matrix and a broken canopy.
+    propagule = (ls.get("lsc_propagule_scale", 0.0)
+                 * lsc.get("matrix_built", 0.3)
+                 * (1.0 - lsc.get("largest_patch", 1.0)))
 
+    # Workload: canopy edge each staff member covers, slowed where crews
+    # cannot drive to the work.
     access = max(lsc.get("vehicle_density", vehicle_ref), 1.0)
     access_penalty = (vehicle_ref / access) ** ls.get("lsc_access_exponent", 0.5)
     load = lsc.get("edge_per_staff", staff_ref) / staff_ref * access_penalty
-    workload = max(load, 1e-12) ** ls.get("lsc_workload_exponent", 0.0)
+    # Sub-linear: workload spans two orders of magnitude across these parks, so
+    # a linear penalty would wipe out the largest site entirely.
+    workload = load ** ls.get("lsc_workload_exponent", 0.0)
 
+    # Removal is less durable on a broken canopy: more re-invasion sources.
     removal_scale = 1.0 - (ls.get("lsc_division_weight", 0.0)
                            * lsc.get("division_index", 0.0))
 
@@ -278,34 +276,49 @@ def landscape_terms(lsc, params):
             "propagule": propagule,
             "workload": max(workload, 1.0),
             "removal_scale": float(np.clip(removal_scale, 0.1, 1.0)),
-            "disturb_edge": max(
-                0.0, 1.0 + ls.get("lsc_edge_disturbance", 0.0)
-            )}
+            "disturb_edge": 1.0 + ls.get("lsc_edge_disturbance", 0.0)}
 
 
 def site_folder_name(site_id):
-    """Convert ``City_NSF`` to the corresponding ``City_nsf`` folder name."""
+    """
+    Convert a site_id such as 'City_NSF' into the output folder name
+    'City_nsf' (city token kept as-is, park-type suffix lower-cased).
+    """
     if '_' not in site_id:
         return site_id[:1].upper() + site_id[1:].lower()
-    city, _, park_type = site_id.partition('_')
-    return f"{city}_{park_type.lower()}"
-
+    head, _, tail = site_id.partition('_')
+    return head + '_' + tail.lower()
 
 def load_scenario(scenario_path):
-    """Load climate-variability and disturbance parameters for one scenario."""
+    """
+    Load a climate-scenario file and return its climate-variability (var_) and
+    disturbance (ext_) parameter groups.
+
+    A scenario file uses the same prefixed CSV format as the parameter table
+    and fully defines the climate forcing of a run (stochastic anomalies,
+    warming trend, and the climate-extreme disturbance regime), independently
+    of the park. Switch scenarios by pointing the run script at a different
+    file in the Scenarios/ folder (e.g. Baseline.csv, RCP45.csv, RCP85.csv).
+    """
     sc = load_params(scenario_path)
     return {'climate_variability': sc['climate_variability'],
             'disturbance':         sc['disturbance']}
 
-
 def apply_scenario(params, scenario_path):
-    """Update a parameter set with the selected climate scenario."""
+    """
+    Merge a climate scenario (see load_scenario) into a loaded parameter set,
+    replacing the climate-variability and disturbance groups. Returns params.
+    The model itself contains no climate-scenario values; they are supplied
+    entirely by the chosen scenario file.
+    """
     sc = load_scenario(scenario_path)
     params['climate_variability'].update(sc['climate_variability'])
     params['disturbance'].update(sc['disturbance'])
     return params
 
-
+#----------------------------------------------------------------------------
+# Section 2: Per-step process functions
+#----------------------------------------------------------------------------
 def compute_condition_indices(native_cov, invasive_cov, canopy, cl, params):
     """
     Compute the four condition indices from landscape state.
@@ -336,10 +349,6 @@ def compute_condition_indices(native_cov, invasive_cov, canopy, cl, params):
     eco_carbon_reference        = params['ecology'].get('eco_carbon_reference', 100.0)
     carbon_max_tha              = cl.get('carbon_max_tha', 150.0)
     heat_urgency                = cl.get('heat_urgency', 0.1)
-    if eco_carbon_reference <= 0 or carbon_max_tha <= 0:
-        raise ValueError(
-            "eco_carbon_reference and carbon_max_tha must be positive"
-        )
 
     carbon_norm    = np.clip(canopy * (1 + heat_urgency) /
                              (carbon_max_tha / eco_carbon_reference), 0, 1)
@@ -354,28 +363,21 @@ def compute_condition_indices(native_cov, invasive_cov, canopy, cl, params):
     return (np.clip(ce, 0, 1), np.clip(cr, 0, 1),
             np.clip(ct, 0, 1), np.clip(cep, 0, 1))
 
-
-def _service_weights(params, service_target):
-    configured = params['service_target_weights'].get(service_target, {})
-    weights = np.array([
-        configured.get('w_e', 0.25),
-        configured.get('w_r', 0.25),
-        configured.get('w_t', 0.25),
-        configured.get('w_ep', 0.25),
-    ], dtype=float)
-    if not np.all(np.isfinite(weights)) or np.any(weights < 0):
-        raise ValueError("Service-target weights must be finite and non-negative")
-    total = weights.sum()
-    if total <= 0:
-        raise ValueError("Service-target weights must have a positive sum")
-    return tuple(weights / total)
-
-
 def select_management_action(ce, cr, ct, cep, st, invasive_cov, params):
-    """Select the highest-priority action for single-action management."""
+    """
+    Select a single management action for the current annual step
+    (single-action management mode).
+
+    The management priority score is mps = w_e*ce + w_r*cr + w_t*ct + w_ep*cep
+    using the service-target weights. Returns (action, mps, deficit).
+    """
     eco_invasive_threshold = params['ecology'].get('eco_invasive_threshold', 0.4)
 
-    w_e, w_r, w_t, w_ep = _service_weights(params, st)
+    st_w = params['service_target_weights'].get(st, {})
+    w_e  = st_w.get('w_e',  0.25)
+    w_r  = st_w.get('w_r',  0.25)
+    w_t  = st_w.get('w_t',  0.25)
+    w_ep = st_w.get('w_ep', 0.25)
 
     mps = w_e * ce + w_r * cr + w_t * ct + w_ep * cep
 
@@ -385,27 +387,19 @@ def select_management_action(ce, cr, ct, cep, st, invasive_cov, params):
         'conservation':      max(0, 0.7 - ct),
         'ecosystem_service': max(0, 0.7 - cep),
     }
-    weighted_deficit = {
-        'ecological': w_e * deficit['ecological'],
-        'recreation': w_r * deficit['recreation'],
-        'conservation': w_t * deficit['conservation'],
-        'ecosystem_service': w_ep * deficit['ecosystem_service'],
-    }
-
-    worst_dimension = max(weighted_deficit, key=weighted_deficit.get)
-    action_for_dimension = {
-        'ecological': 'ecological_restoration',
-        'recreation': 'infrastructure',
-        'conservation': 'visitor_experience',
-        'ecosystem_service': 'ecosystem_service',
-    }
 
     if invasive_cov > eco_invasive_threshold:
         action = 'invasive_removal'
     elif max(deficit.values()) < 0.05:
         action = 'monitoring'
+    elif deficit['ecological']   == max(deficit.values()):
+        action = 'ecological_restoration'
+    elif deficit['recreation']   == max(deficit.values()):
+        action = 'infrastructure'
+    elif deficit['conservation'] == max(deficit.values()):
+        action = 'visitor_experience'
     else:
-        action = action_for_dimension[worst_dimension]
+        action = 'ecosystem_service'
 
     return action, mps, deficit
 
@@ -413,7 +407,14 @@ def select_management_action(ce, cr, ct, cep, st, invasive_cov, params):
 def apply_management_intervention(action, native_cov, invasive_cov, canopy,
                                    cr, ct, cep,
                                    eff_budget, eff_months, mgmt_scale, params):
-    """Apply one management action and return the updated annual state."""
+    """
+    Apply the selected single management action to the landscape. Modifies
+    the ecological state variables and deducts the action-specific cost from
+    the effective budget. The eff_months/8 ratio normalises gains relative
+    to the temperate baseline 8-month management window.
+
+    Returns (native_cov, invasive_cov, canopy, cr, ct, cep, remaining_budget).
+    """
     intv = params['intervention']
     climate_scale = eff_months / 8.0
 
@@ -445,10 +446,8 @@ def apply_management_intervention(action, native_cov, invasive_cov, canopy,
         cep   += intv.get('ecosvc_cep_gain', 0.03)    * mgmt_scale
         canopy += intv.get('ecosvc_canopy_gain', 0.02) * mgmt_scale
 
-    elif action == 'monitoring':
+    else:   # monitoring
         cost = 0.0
-    else:
-        raise ValueError(f"Unknown management action: {action!r}")
 
     remaining_budget = max(0.0, eff_budget - cost)
 
@@ -466,16 +465,28 @@ def simulate_ecological_processes(native_cov, invasive_cov, canopy,
                                    temp_anomaly, precip_anomaly, rng,
                                    events=None, spread_mult=1.0,
                                    disturb_mult=1.0, propagule=0.0):
-    """Advance vegetation state by one year."""
+    """
+    Simulate natural ecological processes for one annual step:
+    invasive spread (logistic-type), drought-driven canopy stress,
+    passive canopy recovery, passive native recovery, and -- when the
+    climate-extreme disturbance module is active -- acute damage from
+    discrete extreme events (heatwave, drought, storm, flood, pest).
+
+    The discrete-event shocks are applied after the continuous processes
+    so that they represent acute losses that subsequently relax back
+    toward the park-type equilibrium through passive recovery.
+
+    Returns (native_cov, invasive_cov, canopy, disturbance_info) where
+    disturbance_info is a dict with the canopy and native losses caused by
+    discrete extreme events this year.
+    """
     eco = params['ecology']
     var = params['climate_variability']
 
     base_spread        = pt.get('base_spread', 0.05)
     invasive_mult      = cl.get('invasive_mult', 1.0)
     invasive_temp_sens = var.get('var_invasive_temp_sensitivity', 0.05)
-    invasive_mult_adj = max(
-        0.0, invasive_mult * (1.0 + invasive_temp_sens * temp_anomaly)
-    )
+    invasive_mult_adj  = invasive_mult * (1.0 + invasive_temp_sens * temp_anomaly)
 
     stochastic_factor = rng.uniform(
         eco.get('eco_spread_stochastic_min', 0.5),
@@ -488,6 +499,8 @@ def simulate_ecological_processes(native_cov, invasive_cov, canopy,
 
     invasive_cov += spread_rate * (1.0 - invasive_cov)
 
+    # Propagule arrival from the surrounding matrix, zero unless the
+    # landscape module supplies it.
     if propagule:
         invasive_cov += propagule * (1.0 - invasive_cov)
 
@@ -509,6 +522,7 @@ def simulate_ecological_processes(native_cov, invasive_cov, canopy,
     canopy += (var.get('var_canopy_precip_sensitivity', 0.02)
                * precip_anomaly * rng.uniform(0.5, 1.5))
 
+    # --- Climate-extreme disturbance: acute damage + post-event regrowth ---
     dist_canopy_loss = 0.0
     dist_native_loss = 0.0
     dist = params['disturbance']
@@ -526,8 +540,13 @@ def simulate_ecological_processes(native_cov, invasive_cov, canopy,
         dist_native_loss *= disturb_mult
         canopy     -= dist_canopy_loss
         native_cov -= dist_native_loss
+        # invasive species often exploit disturbance-opened gaps
         invasive_cov += dist.get('ext_invasive_gap_gain', 0.02) * (
             events.get('storm', 0.0) + events.get('pest', 0.0)) * (1.0 - invasive_cov)
+        # Enhanced post-disturbance regrowth toward the park-type canopy
+        # equilibrium (the disturbance-recovery rate from the spec). Applied
+        # only while the disturbance module is active, so ext_enable = 0
+        # reproduces the original canopy dynamics exactly.
         canopy += dist.get('ext_recovery_rate', 0.06) * max(0.0,
                   pt.get('canopy_init', 0.6) - canopy)
 
@@ -537,26 +556,28 @@ def simulate_ecological_processes(native_cov, invasive_cov, canopy,
             {'canopy_loss': dist_canopy_loss, 'native_loss': dist_native_loss})
 
 
-def simulate_visitor_dynamics(native_cov, invasive_cov, canopy, social_params,
-                              params, rng, events=None):
-    """Compute visitor satisfaction and the recreation load penalty."""
+def simulate_visitor_dynamics(native_cov, invasive_cov, canopy, cl, yr,
+                              social_params, params, rng, events=None):
+    """
+    Compute visitor satisfaction and the visitor-load penalty on Cr.
+    When the disturbance module is active, heatwave / drought / storm
+    events depress satisfaction.
+    Returns (satisfaction, visitor_load_effect).
+    """
+    seasonal = cl.get('visitor_seas', 0.1) * np.sin(2 * np.pi * yr)
     satisfaction = np.clip(
         0.35 * native_cov +
         0.30 * (1 - invasive_cov) +
         0.35 * canopy +
+        seasonal +
         rng.normal(0, 0.05),
         0, 1)
 
     if events:
         dist = params['disturbance']
-        sat_loss = (
-            dist.get('ext_satisfaction_loss_heatwave', 0.10)
-            * events.get('heatwave', 0.0)
-            + dist.get('ext_satisfaction_loss_drought', 0.06)
-            * events.get('drought', 0.0)
-            + dist.get('ext_satisfaction_loss_storm', 0.08)
-            * events.get('storm', 0.0)
-        )
+        sat_loss = (dist.get('ext_satisfaction_loss_heatwave', 0.10) * events.get('heatwave', 0.0) +
+                    dist.get('ext_satisfaction_loss_drought',  0.06) * events.get('drought',  0.0) +
+                    dist.get('ext_satisfaction_loss_storm',    0.08) * events.get('storm',    0.0))
         satisfaction = float(np.clip(satisfaction - sat_loss, 0, 1))
 
     visitor_load_effect = 0.0
@@ -569,8 +590,12 @@ def simulate_visitor_dynamics(native_cov, invasive_cov, canopy, social_params,
     return satisfaction, visitor_load_effect
 
 
-def simulate_community_engagement(social_params, params):
-    """Return vegetation gains associated with civic participation."""
+def simulate_community_engagement(park_type, social_params, params, rng):
+    """
+    Compute community-engagement bonuses to native recovery and invasive
+    reduction when civic participation exceeds the engagement threshold.
+    Returns (community_recovery_bonus, community_invasive_reduction).
+    """
     soc = params['social_coupling']
     threshold = soc.get('soc_engagement_threshold', 0.3)
     recovery_bonus = invasive_reduction = 0.0
@@ -584,7 +609,12 @@ def simulate_community_engagement(social_params, params):
 
 def detect_management_conflict(ce, satisfaction, invasive_cov, remaining_budget,
                                 cl, social_params, params, rng, events=None):
-    """Draw whether a management conflict occurs in the current year."""
+    """
+    Determine whether a management conflict event occurs in this annual step.
+    When the disturbance module is active, pest outbreaks and storms add to
+    the conflict probability (acute damage strains stakeholder relations).
+    Returns True/False.
+    """
     eco = params['ecology']
     cfl = params['conflict']
     soc = params['social_coupling']
@@ -592,7 +622,7 @@ def detect_management_conflict(ce, satisfaction, invasive_cov, remaining_budget,
     type_a = (ce < cfl.get('cfl_Ce_threshold', 0.5)) and \
              (satisfaction < cfl.get('cfl_sat_threshold', 0.5))
     type_b = invasive_cov > eco.get('eco_invasive_threshold', 0.4)
-    type_c = remaining_budget <= 0
+    type_c = remaining_budget < 0
 
     condition_score = int(type_a or type_b or type_c)
 
@@ -601,23 +631,43 @@ def detect_management_conflict(ce, satisfaction, invasive_cov, remaining_budget,
         regulatory_strength = min(
             1.0,
             social_params.get('gdp_per_capita', 25000) /
-            soc.get('soc_budget_gdp_reference', 25000))
+            soc.get('soc_budget_gdp_reference', 40000))
         if regulatory_strength > 0.5:
             conflict_amp += (soc.get('soc_regulatory_sensitivity', 0.15)
                              * (regulatory_strength - 0.5))
 
-    prob = condition_score * conflict_amp + rng.uniform(0, 0.1)
+    prob = condition_score * conflict_amp + rng.uniform(
+        0, cfl.get('cfl_stochastic_range', 0.10)
+    )
 
     if events:
         dist = params['disturbance']
         prob += (dist.get('ext_conflict_pest',  0.12) * events.get('pest',  0.0) +
                  dist.get('ext_conflict_storm', 0.06) * events.get('storm', 0.0))
 
-    return rng.uniform(0, 1) < np.clip(prob, 0.0, 1.0)
+    return rng.uniform(0, 1) < prob
 
-
+#----------------------------------------------------------------------------
+# Section 2b: Climate-extreme disturbance sampling
+#----------------------------------------------------------------------------
 def generate_extreme_events(yr, temp_anomaly, precip_anomaly, cl, params, rng):
-    """Sample annual heat, drought, rainfall, storm, and pest events."""
+    """
+    Sample discrete climate-extreme events for the current year.
+
+    Five event types are considered: heatwave, drought, heavy rainfall /
+    flood, storm damage, and pest / disease outbreak. For each type an
+    occurrence probability is formed from a base annual frequency, a
+    sensitivity to the current temperature / precipitation anomaly, a
+    contribution from the climate-zone modifiers already present in the
+    parameter table (heat_urgency, drought_stress, invasive_mult), and an
+    optional warming-driven trend that raises frequencies over time. If an
+    event occurs, an intensity in [0, 1] is drawn.
+
+    Returns a dict with one intensity per event type (0.0 if the event did
+    not occur). When ext_enable < 0.5 the function returns all-zero
+    intensities WITHOUT drawing any random numbers, so the disabled module
+    reproduces the original random-number stream exactly.
+    """
     events = {'heatwave': 0.0, 'drought': 0.0, 'heavy_rain': 0.0,
               'storm': 0.0, 'pest': 0.0}
 
@@ -628,41 +678,37 @@ def generate_extreme_events(yr, temp_anomaly, precip_anomaly, cl, params, rng):
     warm = dist.get('ext_warming_freq_trend', 0.002) * yr
     imin = dist.get('ext_intensity_min', 0.30)
     imax = dist.get('ext_intensity_max', 1.00)
-    if not 0.0 <= imin <= imax:
-        raise ValueError(
-            "Extreme-event intensity bounds must satisfy 0 <= min <= max"
-        )
 
     def _intensity(scale=1.0):
         return float(np.clip(rng.uniform(imin, imax) * scale, 0.0, 1.0))
 
+    # Heatwave -- more likely and stronger under positive temperature anomaly
     heat_p = (dist.get('ext_heatwave_freq', 0.10) +
               dist.get('ext_heatwave_temp_sensitivity', 0.12) * max(0.0, temp_anomaly) +
               dist.get('ext_heat_zone_coupling', 0.15) * cl.get('heat_urgency', 0.10) + warm)
     if rng.uniform(0, 1) < np.clip(heat_p, 0, 1):
         events['heatwave'] = _intensity(1.0 + 0.5 * max(0.0, temp_anomaly))
 
-    drought_p = (
-        dist.get('ext_drought_freq', 0.12)
-        + dist.get('ext_drought_precip_sensitivity', 0.50)
-        * max(0.0, -precip_anomaly)
-        + dist.get('ext_drought_zone_coupling', 0.20)
-        * cl.get('drought_stress', 0.10)
-        + warm
-    )
+    # Drought -- more likely and stronger under negative precipitation anomaly
+    drought_p = (dist.get('ext_drought_freq', 0.12) +
+                 dist.get('ext_drought_precip_sensitivity', 0.50) * max(0.0, -precip_anomaly) +
+                 dist.get('ext_drought_zone_coupling', 0.20) * cl.get('drought_stress', 0.10) + warm)
     if rng.uniform(0, 1) < np.clip(drought_p, 0, 1):
         events['drought'] = _intensity(1.0 + 0.5 * max(0.0, -precip_anomaly))
 
+    # Heavy rainfall / flood -- more likely under positive precipitation anomaly
     rain_p = (dist.get('ext_heavy_rain_freq', 0.12) +
               dist.get('ext_heavy_rain_precip_sensitivity', 0.50) * max(0.0, precip_anomaly) +
               warm)
     if rng.uniform(0, 1) < np.clip(rain_p, 0, 1):
         events['heavy_rain'] = _intensity(1.0 + 0.5 * max(0.0, precip_anomaly))
 
+    # Storm damage -- weather-driven, largely climate-independent base rate
     storm_p = dist.get('ext_storm_prob', 0.08) + warm
     if rng.uniform(0, 1) < np.clip(storm_p, 0, 1):
         events['storm'] = _intensity()
 
+    # Pest / disease outbreak -- favoured by warmth and high invasive context
     pest_p = (dist.get('ext_pest_prob', 0.07) +
               dist.get('ext_pest_temp_sensitivity', 0.05) * max(0.0, temp_anomaly) +
               dist.get('ext_pest_zone_coupling', 0.02) * cl.get('invasive_mult', 1.0) + warm)
@@ -671,9 +717,17 @@ def generate_extreme_events(yr, temp_anomaly, precip_anomaly, cl, params, rng):
 
     return events
 
+def generate_climate_anomaly(yr, site_climate, params, rng, cl=None):
+    """
+    Generate temperature and precipitation anomalies for the current year and
+    sample any discrete climate-extreme events.
 
-def generate_climate_anomaly(yr, params, rng, cl=None):
-    """Generate continuous climate anomalies and discrete annual events."""
+    Returns dict {'temp_anomaly', 'precip_anomaly', 'events'} where 'events'
+    is the per-type intensity dict from generate_extreme_events(). The two
+    continuous anomaly draws happen first, so the disturbance module (which
+    draws afterwards, and only when enabled) does not perturb the historical
+    anomaly stream.
+    """
     var = params['climate_variability']
     temp_anomaly = (rng.normal(0, var.get('var_temp_anomaly_sd', 0.5))
                     + var.get('var_warming_rate', 0.02) * yr)
@@ -684,9 +738,22 @@ def generate_climate_anomaly(yr, params, rng, cl=None):
             'precip_anomaly': precip_anomaly,
             'events': events}
 
+#----------------------------------------------------------------------------
+# Section 3: Management portfolio optimization module
+#----------------------------------------------------------------------------
+# Default action costs and per-cycle effects are read from params; the
+# portfolio module reuses the same intervention parameters as the single-
+# action mode, so a portfolio that places 100% weight on one action is
+# numerically equivalent to selecting that action in single mode.
 
 def default_portfolio(params):
-    """Return the configured default management portfolio."""
+    """
+    Return the documented default budget-share portfolio
+    (invasive removal 0.30, ecological restoration 0.25,
+    ecosystem service 0.20, infrastructure 0.15, monitoring 0.10).
+    Values can be overridden by opt_share_<action> parameters and are
+    renormalised to sum to 1.
+    """
     opt = params['optimization']
     raw = {
         'monitoring':             opt.get('opt_share_monitoring', 0.10),
@@ -696,14 +763,8 @@ def default_portfolio(params):
         'visitor_experience':     opt.get('opt_share_visitor_experience', 0.00),
         'ecosystem_service':      opt.get('opt_share_ecosystem_service', 0.20),
     }
-    values = np.asarray(list(raw.values()), dtype=float)
-    if not np.all(np.isfinite(values)) or np.any(values < 0):
-        raise ValueError("Default portfolio shares must be finite and non-negative")
-    total = values.sum()
-    if total <= 0:
-        raise ValueError("At least one default portfolio share must be positive")
+    total = sum(raw.values()) or 1.0
     return {a: raw[a] / total for a in action_order}
-
 
 def _portfolio_bounds(params):
     """Per-action (min_share, max_share) bounds from opt_min_/opt_max_."""
@@ -715,81 +776,93 @@ def _portfolio_bounds(params):
     }
     bounds = {}
     for a in action_order:
-        lo_raw = float(opt.get(f'opt_min_{a}', 0.0))
-        hi_raw = float(opt.get(f'opt_max_{a}', default_max.get(a, 0.6)))
-        if not np.isfinite(lo_raw) or not np.isfinite(hi_raw):
-            raise ValueError(f"Portfolio bounds for {a!r} must be finite")
-        if lo_raw > hi_raw:
-            raise ValueError(
-                f"Minimum portfolio share exceeds maximum for {a!r}"
-            )
-        lo = float(np.clip(lo_raw, 0.0, 1.0))
-        hi = float(np.clip(hi_raw, lo, 1.0))
-        bounds[a] = (lo, hi)
-
-    lower_sum = sum(lo for lo, _ in bounds.values())
-    upper_sum = sum(hi for _, hi in bounds.values())
-    if lower_sum > 1.0 + 1e-10 or upper_sum < 1.0 - 1e-10:
-        raise ValueError(
-            "Portfolio bounds are infeasible: minimum shares must sum to at "
-            "most 1 and maximum shares to at least 1"
-        )
+        lo = opt.get(f'opt_min_{a}', 0.0)
+        hi = opt.get(f'opt_max_{a}', default_max.get(a, 0.6))
+        bounds[a] = (max(0.0, lo), min(1.0, max(lo, hi)))
     return bounds
 
-
 def _sample_portfolio(bounds, rng):
-    """Draw a random portfolio that satisfies all share constraints."""
-    raw = np.array([rng.uniform(bounds[a][0], bounds[a][1]) for a in action_order])
-    proposal = {a: float(raw[i]) for i, a in enumerate(action_order)}
-    return _project_to_bounds(proposal, bounds)
-
-
-def _project_to_bounds(shares, bounds):
-    """Project a share vector onto the bounded unit simplex."""
+    """
+    Draw a random feasible budget-share vector. Shares are sampled within
+    their per-action bounds, normalised to sum to 1, then clipped against
+    the upper bounds and renormalised (soft constraint satisfaction).
+    """
     los = np.array([bounds[a][0] for a in action_order])
     his = np.array([bounds[a][1] for a in action_order])
-    values = np.array(
-        [max(0.0, float(shares.get(a, 0.0))) for a in action_order],
-        dtype=float,
-    )
-    if not np.all(np.isfinite(values)):
-        raise ValueError("Portfolio shares must be finite")
-
-    # For x = clip(values - lambda, lower, upper), find lambda such that
-    # sum(x) = 1. The bounded simplex is feasible by construction above.
-    left = float(np.min(values - his))
-    right = float(np.max(values - los))
-    for _ in range(80):
-        midpoint = (left + right) / 2.0
-        x = np.clip(values - midpoint, los, his)
-        if x.sum() > 1.0:
-            left = midpoint
+    raw = np.array([rng.uniform(bounds[a][0], bounds[a][1]) for a in action_order])
+    if raw.sum() <= 0:
+        raw = np.ones(len(action_order))
+    shares = raw / raw.sum()
+    for _ in range(4):
+        over = shares > his + 1e-9
+        if not over.any():
+            break
+        shares = np.minimum(shares, his)
+        deficit = 1.0 - shares.sum()
+        free = ~over
+        if deficit > 0 and free.any():
+            pool = shares[free].sum()
+            if pool > 0:
+                shares[free] += deficit * (shares[free] / pool)
+            else:
+                shares[free] += deficit / free.sum()
         else:
-            right = midpoint
+            break
+    s = shares.sum()
+    if s > 0:
+        shares = shares / s
+    return {a: float(shares[i]) for i, a in enumerate(action_order)}
 
-    x = np.clip(values - (left + right) / 2.0, los, his)
-    residual = 1.0 - x.sum()
-    if abs(residual) > 1e-12:
-        room = (his - x) if residual > 0 else (x - los)
-        room_sum = room.sum()
-        if room_sum > 0:
-            x += residual * room / room_sum
-
+def _project_to_bounds(shares, bounds):
+    """
+    Project an arbitrary share vector onto the feasible set defined by the
+    per-action [min, max] bounds with a sum-to-one constraint, using an
+    iterative clip-and-redistribute (water-filling) scheme. This guarantees
+    that every evaluated portfolio -- including the structured seed
+    candidates -- respects the configured opt_min_/opt_max_ shares.
+    """
+    los = np.array([bounds[a][0] for a in action_order])
+    his = np.array([bounds[a][1] for a in action_order])
+    x = np.array([max(0.0, shares.get(a, 0.0)) for a in action_order], dtype=float)
+    if x.sum() <= 0:
+        x = np.ones(len(action_order))
+    x = x / x.sum()
+    for _ in range(8):
+        x = np.clip(x, los, his)
+        s = x.sum()
+        if abs(s - 1.0) < 1e-9:
+            break
+        if s > 1.0:
+            room = x - los
+            total = room.sum()
+            if total <= 1e-12:
+                break
+            x = x - (s - 1.0) * (room / total)
+        else:
+            room = his - x
+            total = room.sum()
+            if total <= 1e-12:
+                break
+            x = x + (1.0 - s) * (room / total)
+    x = np.clip(x, los, his)
+    s = x.sum()
+    if s > 0:
+        x = x / s
     return {a: float(x[i]) for i, a in enumerate(action_order)}
 
 
 def apply_management_portfolio(shares, native_cov, invasive_cov, canopy,
                                cr, ct, cep,
                                eff_budget, eff_months, mgmt_scale, params):
-    """Apply all actions in a budget-share portfolio."""
-    share_values = np.array(
-        [shares.get(action, 0.0) for action in action_order], dtype=float
-    )
-    if not np.all(np.isfinite(share_values)) or np.any(share_values < 0):
-        raise ValueError("Portfolio shares must be finite and non-negative")
-    if not np.isclose(share_values.sum(), 1.0, atol=1e-8):
-        raise ValueError("Portfolio shares must sum to 1")
+    """
+    Apply a budget-share portfolio: every action contributes its per-cycle
+    effect scaled by its budget share (and by the climate window and the
+    joint management factor). The portfolio cost is the share-weighted sum
+    of the individual action costs and is deducted from the effective budget.
 
+    Returns (native_cov, invasive_cov, canopy, cr, ct, cep,
+             remaining_budget, portfolio_cost).
+    """
     intv = params['intervention']
     climate_scale = eff_months / 8.0
 
@@ -807,10 +880,7 @@ def apply_management_portfolio(shares, native_cov, invasive_cov, canopy,
 
     if s_eco > 0:
         native_cov   += intv.get('ecorest_native_gain', 0.04) * climate_scale * mgmt_scale * s_eco
-        invasive_cov -= (
-            intv.get('ecorest_invasive_reduction', 0.02)
-            * climate_scale * mgmt_scale * s_eco
-        )
+        invasive_cov -= intv.get('ecorest_invasive_reduction', 0.02) * climate_scale * mgmt_scale * s_eco
 
     if s_infra > 0:
         cr += intv.get('infra_recreation_gain', 0.05) * mgmt_scale * s_infra
@@ -840,21 +910,23 @@ def apply_management_portfolio(shares, native_cov, invasive_cov, canopy,
 
 
 def _portfolio_utility(ce, cr, ct, cep, satisfaction, invasive_cov,
-                       cost, eff_budget, params, service_target=None):
-    """Score the ecological, social, and financial result of a portfolio."""
+                       cost, eff_budget, params):
+    """
+    Scalar utility of a one-year portfolio outcome:
+        + w_ce*Ce + w_cr*Cr + w_ct*Ct + w_cep*Cep + w_sat*satisfaction
+        - w_invasive*invasive - w_conflict*conflict_proxy - w_cost*cost_norm
+    The conflict proxy rises as invasive cover exceeds the ecological
+    threshold and as Ce falls below the conflict threshold.
+    """
     o = params['optimization']
     thr = params['ecology'].get('eco_invasive_threshold', 0.4)
     ce_thr = params['conflict'].get('cfl_Ce_threshold', 0.5)
     conflict_proxy = max(0.0, invasive_cov - thr) + max(0.0, ce_thr - ce)
-    cost_norm = cost / eff_budget if eff_budget > 0 else float(cost > 0)
-    target_scale = 4.0 * np.asarray(
-        _service_weights(params, service_target), dtype=float
-    )
-
-    return (o.get('opt_w_ce', 1.0)  * target_scale[0] * ce +
-            o.get('opt_w_cr', 0.5)  * target_scale[1] * cr +
-            o.get('opt_w_ct', 0.5)  * target_scale[2] * ct +
-            o.get('opt_w_cep', 0.8) * target_scale[3] * cep +
+    cost_norm = (cost / eff_budget) if eff_budget > 0 else 0.0
+    return (o.get('opt_w_ce', 1.0)  * ce +
+            o.get('opt_w_cr', 0.5)  * cr +
+            o.get('opt_w_ct', 0.5)  * ct +
+            o.get('opt_w_cep', 0.8) * cep +
             o.get('opt_w_sat', 0.8) * satisfaction -
             o.get('opt_w_invasive', 1.0) * invasive_cov -
             o.get('opt_w_conflict', 0.8) * conflict_proxy -
@@ -862,16 +934,21 @@ def _portfolio_utility(ce, cr, ct, cep, satisfaction, invasive_cov,
 
 
 def optimize_portfolio(state, cl, eff_budget, eff_months, mgmt_scale,
-                       params, rng, method='random', service_target=None):
-    """Choose the portfolio with the highest one-year utility."""
-    valid_methods = {'random', 'scipy', 'fixed'}
-    if method not in valid_methods:
-        choices = ', '.join(sorted(valid_methods))
-        raise ValueError(f"Unknown portfolio method {method!r}; use {choices}")
+                       params, rng, method='random'):
+    """
+    Choose a budget-share portfolio that maximises the one-step utility.
 
-    bounds = _portfolio_bounds(params)
+    state  : (native_cov, invasive_cov, canopy, cr, ct, cep) at decision time.
+    method : 'random' (random search, default), 'scipy' (random search then
+             SLSQP refinement), or 'fixed' (return the default portfolio).
+
+    Each candidate is evaluated by applying it to a copy of the current
+    state, recomputing the condition indices, estimating satisfaction from
+    the post-intervention landscape, and scoring the result with
+    _portfolio_utility(). Returns (best_shares, best_utility).
+    """
     if method == 'fixed':
-        return _project_to_bounds(default_portfolio(params), bounds), np.nan
+        return default_portfolio(params), np.nan
 
     native_cov, invasive_cov, canopy, cr, ct, cep = state
 
@@ -880,18 +957,16 @@ def optimize_portfolio(state, cl, eff_budget, eff_months, mgmt_scale,
             shares, native_cov, invasive_cov, canopy, cr, ct, cep,
             eff_budget, eff_months, mgmt_scale, params)
         ece, ecr, ect, ecep = compute_condition_indices(nn, ii, cc, cl, params)
-        ecr = float(np.clip(ecr + (rr - cr), 0.0, 1.0))
-        ect = float(np.clip(ect + (tt - ct), 0.0, 1.0))
-        ecep = float(np.clip(ecep + (pp - cep), 0.0, 1.0))
         sat_proxy = float(np.clip(0.35 * nn + 0.30 * (1 - ii) + 0.35 * cc, 0, 1))
         return _portfolio_utility(ece, ecr, ect, ecep, sat_proxy, ii,
-                                  cost, eff_budget, params,
-                                  service_target=service_target), cost
+                                  cost, eff_budget, params), cost
 
+    bounds = _portfolio_bounds(params)
     n_samples = int(params['optimization'].get('opt_n_samples', 60))
-    if n_samples < 0:
-        raise ValueError("opt_n_samples must be non-negative")
 
+    # Structured seed candidates ensure good coverage of the simplex; each is
+    # projected onto the feasible (bounded) set so a seed cannot violate the
+    # configured per-action max shares.
     seeds = [default_portfolio(params),
              {a: (1.0 if a == 'invasive_removal' else 0.0) for a in action_order},
              {a: 1.0 / len(action_order) for a in action_order}]
@@ -907,79 +982,55 @@ def optimize_portfolio(state, cl, eff_budget, eff_months, mgmt_scale,
     if method == 'scipy':
         try:
             from scipy.optimize import minimize
-        except ImportError as exc:
-            raise ImportError(
-                "portfolio_method='scipy' requires the scipy package"
-            ) from exc
+            x0 = np.array([best_shares[a] for a in action_order])
+            lo = [bounds[a][0] for a in action_order]
+            hi = [bounds[a][1] for a in action_order]
 
-        x0 = np.array([best_shares[a] for a in action_order])
-        lo = [bounds[a][0] for a in action_order]
-        hi = [bounds[a][1] for a in action_order]
+            def neg_u(x):
+                x = np.clip(x, 0, None)
+                if x.sum() <= 0:
+                    return 1e9
+                x = x / x.sum()
+                sh = {a: float(x[i]) for i, a in enumerate(action_order)}
+                u, _ = _evaluate(sh)
+                return -u
 
-        def neg_u(x):
-            sh = _project_to_bounds(
-                {a: float(x[i]) for i, a in enumerate(action_order)},
-                bounds,
-            )
-            u, _ = _evaluate(sh)
-            return -u
-
-        res = minimize(
-            neg_u,
-            x0,
-            method='SLSQP',
-            bounds=list(zip(lo, hi)),
-            constraints=[{'type': 'eq', 'fun': lambda x: x.sum() - 1.0}],
-            options={'maxiter': 60, 'ftol': 1e-4},
-        )
-        if res.success:
-            refined = _project_to_bounds(
-                {a: float(res.x[i]) for i, a in enumerate(action_order)},
-                bounds,
-            )
-            refined_u, _ = _evaluate(refined)
-            if refined_u > best_u:
-                best_shares = refined
-                best_u = refined_u
-        else:
-            warnings.warn(
-                f"SLSQP did not converge ({res.message}); using the best "
-                "random-search portfolio",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+            res = minimize(neg_u, x0, method='SLSQP',
+                           bounds=list(zip(lo, hi)),
+                           constraints=[{'type': 'eq',
+                                         'fun': lambda x: x.sum() - 1.0}],
+                           options={'maxiter': 60, 'ftol': 1e-4})
+            if res.success and -res.fun > best_u:
+                x = np.clip(res.x, 0, None)
+                x = x / x.sum() if x.sum() > 0 else x
+                best_shares = {a: float(x[i]) for i, a in enumerate(action_order)}
+                best_u = -res.fun
+        except Exception:
+            pass   # fall back silently to the random-search optimum
 
     return best_shares, best_u
 
 
+#----------------------------------------------------------------------------
+# Section 4: Annual loop and replicate runner
+#----------------------------------------------------------------------------
 def simulate_ufp(park_type, service_target, climate_zone,
                  n_years, budget, n_managers, run_id, params, rng,
                  social_params=None, management_mode='single',
                  portfolio_method='random', landscape=None):
-    """Simulate one park and return one row per year."""
-    if n_years <= 0:
-        raise ValueError("n_years must be positive")
-    if budget < 0:
-        raise ValueError("budget must be non-negative")
-    if n_managers < 0:
-        raise ValueError("n_managers must be non-negative")
-    if management_mode not in {'single', 'portfolio'}:
-        raise ValueError("management_mode must be 'single' or 'portfolio'")
-    if management_mode == 'portfolio' and portfolio_method not in {
-            'random', 'scipy', 'fixed'}:
-        raise ValueError(
-            "portfolio_method must be 'random', 'scipy', or 'fixed'"
-        )
+    """
+    Simulate one urban forest park for n_years and return a pd.DataFrame
+    of annual records.
 
-    if park_type not in params['park_type_params']:
-        raise ValueError(f"Unknown park type: {park_type!r}")
-    if climate_zone not in params['climate_params']:
-        raise ValueError(f"Unknown climate zone: {climate_zone!r}")
-    if service_target not in params['service_target_weights']:
-        raise ValueError(f"Unknown service target: {service_target!r}")
-
-    pt  = params['park_type_params'][park_type]
-    cl  = params['climate_params'][climate_zone]
+    management_mode  : 'single'    -> one dominant action per year (original
+                                      UFPM-SMF rule), or
+                       'portfolio' -> annual budget allocated across actions
+                                      via the portfolio optimization module.
+    portfolio_method : 'random' | 'scipy' | 'fixed' (used only in portfolio
+                       mode).
+    """
+    pt  = params['park_type_params'].get(park_type, {})
+    cl  = params['climate_params'].get(climate_zone, {})
     eco = params['ecology']
     dist = params['disturbance']
 
@@ -996,60 +1047,50 @@ def simulate_ufp(park_type, service_target, climate_zone,
                            + rng.normal(0, eco.get('eco_init_perturbation_sd', 0.03)),
                            0, 1)
 
-    gdp_reference = params['social_coupling'].get(
-        'soc_budget_gdp_reference', 25000
-    )
+    gdp_reference     = params['social_coupling'].get('soc_budget_gdp_reference', 25000)
     budget_elasticity = params['social_coupling'].get('soc_budget_elasticity', 0.5)
-    if gdp_reference <= 0:
-        raise ValueError("soc_budget_gdp_reference must be positive")
-    if social_params:
-        site_gdp = social_params.get('gdp_per_capita', gdp_reference)
-        if site_gdp < 0:
-            raise ValueError("gdp_per_capita must be non-negative")
-        gdp_scale = (site_gdp / gdp_reference) ** budget_elasticity
-    else:
-        gdp_scale = 1.0
+    gdp_scale = (social_params.get('gdp_per_capita', gdp_reference) / gdp_reference) \
+                ** budget_elasticity if social_params else 1.0
 
     eff_budget_base = budget * gdp_scale
     budget_adequate = params['social_coupling'].get('soc_budget_adequate', 100.0)
-    if budget_adequate <= 0:
-        raise ValueError("soc_budget_adequate must be positive")
     budget_factor   = float(np.clip(eff_budget_base / budget_adequate, 0, 1))
     mgmt_scale      = min(1.0, n_managers / 5.0) * budget_factor
-    eff_months      = float(cl.get('mgmt_window', 8))
-    if eff_months < 0:
-        raise ValueError("mgmt_window must be non-negative")
+    eff_months      = int(cl.get('mgmt_window', 8))
 
+    # --- Landscape module ---------------------------------------------------
+    # terms are neutral when landscape is None, so the model reduces exactly to
+    # the non-spatial version.
     lst = landscape_terms(landscape, params)
-    ls_par = params.get('landscape', {})
+    ls_par = params['landscape']
     phi_e = float(np.clip(lst['edge_fraction'], 0.0, 0.95))
     use_zones = landscape is not None and phi_e > 0.0
 
+    # Management capacity is diluted by the canopy edge each staff member has
+    # to cover, and by how hard that edge is to reach.
     mgmt_scale = mgmt_scale / lst['workload']
 
     edge_spread   = 1.0 + ls_par.get('lsc_edge_spread', 0.0) * lst['kappa']
     edge_priority = ls_par.get('lsc_edge_priority', 0.0)
     diffusion     = ls_par.get('lsc_diffusion', 0.0)
-    if edge_spread < 0:
-        raise ValueError("The landscape-adjusted invasive spread rate is negative")
-    if not 0.0 <= diffusion <= 1.0:
-        raise ValueError("lsc_diffusion must be in [0, 1]")
 
+    # Zone state starts from the park-level draw; the zones diverge from there.
     nat_e, inv_e, can_e = native_cov, invasive_cov, canopy
     nat_c, inv_c, can_c = native_cov, invasive_cov, canopy
 
+    # Dedicated RNG for portfolio search keeps the ecological RNG stream
+    # independent of the number of optimisation samples. Only created in
+    # portfolio mode, so single mode reproduces the original stream.
     opt_rng = None
-    if management_mode == 'portfolio' and portfolio_method != 'fixed':
-        seed_source = np.random.RandomState()
-        seed_source.set_state(rng.get_state())
-        opt_rng = np.random.RandomState(seed_source.randint(0, 2**31 - 1))
+    if management_mode == 'portfolio':
+        opt_rng = np.random.RandomState(rng.randint(0, 2**31 - 1))
 
     storm_extra_cost = dist.get('ext_extra_cost_storm', 12.0)
     flood_infra_pressure = dist.get('ext_infra_pressure_flood', 0.05)
 
     results = []
     for yr in range(n_years):
-        anom = generate_climate_anomaly(yr, params, rng, cl)
+        anom = generate_climate_anomaly(yr, {}, params, rng, cl)
         ta   = anom['temp_anomaly']
         pa   = anom['precip_anomaly']
         ev   = anom['events']
@@ -1057,15 +1098,14 @@ def simulate_ufp(park_type, service_target, climate_zone,
         ce, cr, ct, cep = compute_condition_indices(
             native_cov, invasive_cov, canopy, cl, params)
         nat_prev, inv_prev, can_prev = native_cov, invasive_cov, canopy
-        cr_before, ct_before, cep_before = cr, ct, cep
 
+        # --- Management module: single action or optimised portfolio -------
         alloc = {a: 0.0 for a in action_order}
         if management_mode == 'portfolio':
             shares, _util = optimize_portfolio(
                 (native_cov, invasive_cov, canopy, cr, ct, cep),
                 cl, eff_budget_base, eff_months, mgmt_scale,
-                params, opt_rng, method=portfolio_method,
-                service_target=service_target)
+                params, opt_rng, method=portfolio_method)
             (native_cov, invasive_cov, canopy,
              cr, ct, cep, eff_budget, _pcost) = apply_management_portfolio(
                 shares, native_cov, invasive_cov, canopy, cr, ct, cep,
@@ -1073,7 +1113,7 @@ def simulate_ufp(park_type, service_target, climate_zone,
             alloc = shares
             action = max(action_order, key=lambda a: shares.get(a, 0.0))
         else:
-            action, _initial_mps, _ = select_management_action(
+            action, mps, _ = select_management_action(
                 ce, cr, ct, cep, service_target, invasive_cov, params)
             (native_cov, invasive_cov, canopy,
              cr, ct, cep, eff_budget) = apply_management_intervention(
@@ -1081,11 +1121,11 @@ def simulate_ufp(park_type, service_target, climate_zone,
                 eff_budget_base, eff_months, mgmt_scale, params)
             alloc[action] = 1.0
 
-        cr_adjustment = cr - cr_before
-        ct_adjustment = ct - ct_before
-        cep_adjustment = cep - cep_before
-
+        # --- Ecological processes (incl. extreme-event acute damage) -------
         if use_zones:
+            # Push the management outcome back into the two zones. Invasive
+            # removal is steered toward whichever zone is more invaded; the
+            # other effects are spread evenly over the park.
             d_nat = native_cov - nat_prev
             d_inv = invasive_cov - inv_prev
             d_can = canopy - can_prev
@@ -1103,6 +1143,7 @@ def simulate_ufp(park_type, service_target, climate_zone,
                 nat_c, inv_c, can_c, park_type, cl, pt, params, ta, pa, rng,
                 events=ev)
 
+            # Invasives leak inward from the edge; the exchange conserves cover.
             flux = diffusion * (inv_e - inv_c)
             inv_e = float(np.clip(inv_e - flux * (1.0 - phi_e), 0, 1))
             inv_c = float(np.clip(inv_c + flux * phi_e, 0, 1))
@@ -1119,39 +1160,35 @@ def simulate_ufp(park_type, service_target, climate_zone,
                 native_cov, invasive_cov, canopy, park_type, cl, pt,
                 params, ta, pa, rng, events=ev)
 
+        # Storm damage imposes an extra remediation cost on the annual budget.
         extra_cost = storm_extra_cost * ev.get('storm', 0.0)
         eff_budget = max(0.0, eff_budget - extra_cost)
 
+        # --- Visitor dynamics (incl. extreme-event satisfaction loss) ------
         satisfaction, vload = simulate_visitor_dynamics(
-            native_cov, invasive_cov, canopy, social_params, params, rng,
-            events=ev)
+            native_cov, invasive_cov, canopy, cl, yr,
+            social_params, params, rng, events=ev)
+        cr = max(0.0, cr - vload)
 
-        bonus, inv_red = simulate_community_engagement(social_params, params)
-        if use_zones:
-            nat_e = float(np.clip(nat_e + bonus, 0.0, 1.0))
-            nat_c = float(np.clip(nat_c + bonus, 0.0, 1.0))
-            inv_e = float(np.clip(inv_e - inv_red, 0.0, 1.0))
-            inv_c = float(np.clip(inv_c - inv_red, 0.0, 1.0))
-            native_cov = phi_e * nat_e + (1.0 - phi_e) * nat_c
-            invasive_cov = phi_e * inv_e + (1.0 - phi_e) * inv_c
-        else:
-            native_cov = float(np.clip(native_cov + bonus, 0.0, 1.0))
-            invasive_cov = float(np.clip(invasive_cov - inv_red, 0.0, 1.0))
+        # Heavy rainfall / flood increases infrastructure pressure (Cr penalty).
+        cr = max(0.0, cr - flood_infra_pressure * ev.get('heavy_rain', 0.0))
 
-        ce, cr_base, ct_base, cep_base = compute_condition_indices(
-            native_cov, invasive_cov, canopy, cl, params)
-        flood_penalty = flood_infra_pressure * ev.get('heavy_rain', 0.0)
-        cr = float(np.clip(cr_base + cr_adjustment - vload - flood_penalty,
-                           0.0, 1.0))
-        ct = float(np.clip(ct_base + ct_adjustment, 0.0, 1.0))
-        cep = float(np.clip(cep_base + cep_adjustment, 0.0, 1.0))
+        bonus, inv_red = simulate_community_engagement(
+            park_type, social_params, params, rng)
+        native_cov   = np.clip(native_cov + bonus,   0, 1)
+        invasive_cov = np.clip(invasive_cov - inv_red, 0, 1)
 
         conflict = detect_management_conflict(
             ce, satisfaction, invasive_cov, eff_budget, cl,
             social_params, params, rng, events=ev)
 
-        w_e, w_r, w_t, w_ep = _service_weights(params, service_target)
-        mps = w_e * ce + w_r * cr + w_t * ct + w_ep * cep
+        ce, cr, ct, cep = compute_condition_indices(
+            native_cov, invasive_cov, canopy, cl, params)
+        st_w = params['service_target_weights'].get(service_target, {})
+        mps  = (st_w.get('w_e',  0.25) * ce  +
+                st_w.get('w_r',  0.25) * cr  +
+                st_w.get('w_t',  0.25) * ct  +
+                st_w.get('w_ep', 0.25) * cep)
 
         record = {
             'run_id':         run_id,
@@ -1174,6 +1211,7 @@ def simulate_ufp(park_type, service_target, climate_zone,
             'budget_used':    eff_budget_base - eff_budget,
             'temp_anomaly':   ta,
             'precip_anomaly': pa,
+            # Climate-extreme disturbance diagnostics
             'heatwave':       ev.get('heatwave', 0.0),
             'drought_event':  ev.get('drought', 0.0),
             'heavy_rain':     ev.get('heavy_rain', 0.0),
@@ -1187,6 +1225,7 @@ def simulate_ufp(park_type, service_target, climate_zone,
             'canopy_edge':     can_e if use_zones else canopy,
             'canopy_core':     can_c if use_zones else canopy,
         }
+        # Per-action budget allocation (one-hot in single mode)
         for a in action_order:
             record[f'alloc_{a}'] = alloc.get(a, 0.0)
 
@@ -1199,13 +1238,12 @@ def run_replicates(park_type, service_target, climate_zone,
                    n_reps, n_years, budget, n_managers, seed, params,
                    social_params=None, management_mode='single',
                    portfolio_method='random', landscape=None):
-    """Run independent replicates using deterministic per-replicate seeds."""
-    if n_reps <= 0:
-        raise ValueError("n_reps must be positive")
+    """
+    Run multiple stochastic replicates. Replicate r uses seed + r * 7919.
+    """
     out = []
     for rep in range(n_reps):
-        replicate_seed = (int(seed) + rep * 7919) % (2**32)
-        rng = np.random.RandomState(replicate_seed)
+        rng = np.random.RandomState(seed + rep * 7919)
         out.append(simulate_ufp(park_type, service_target, climate_zone,
                                 n_years, budget, n_managers,
                                 run_id=rep, params=params, rng=rng,
@@ -1215,13 +1253,18 @@ def run_replicates(park_type, service_target, climate_zone,
                                 landscape=landscape))
     return pd.concat(out, ignore_index=True)
 
-
+#----------------------------------------------------------------------------
+# Section 5: Sensitivity analysis
+#----------------------------------------------------------------------------
 def sensitivity_analysis(park_type, service_target, climate_zone, params,
                          budget_range, n_managers_range,
                          n_reps, n_years, seed, output_dir,
                          social_params=None, management_mode='single',
-                         portfolio_method='random', landscape=None):
-    """Evaluate a budget-by-staffing grid and save the endpoint results."""
+                         portfolio_method='random'):
+    """
+    Grid sweep over budget and n_managers. Writes
+    output_dir/Sensitivity_analysis.csv and returns the DataFrame.
+    """
     rows = []
     for budget in budget_range:
         for n_managers in n_managers_range:
@@ -1229,8 +1272,7 @@ def sensitivity_analysis(park_type, service_target, climate_zone, params,
                                 n_reps, n_years, budget, n_managers,
                                 seed, params, social_params=social_params,
                                 management_mode=management_mode,
-                                portfolio_method=portfolio_method,
-                                landscape=landscape)
+                                portfolio_method=portfolio_method)
             end = df[df['year'] == n_years - 1]
             rows.append({
                 'budget':         budget,
@@ -1247,26 +1289,23 @@ def sensitivity_analysis(park_type, service_target, climate_zone, params,
     return df_sens
 
 
-def sobol_sensitivity(site_cfg, params, output_dir, n_base=64, n_years=50,
-                      n_reps=3, seed=2024, landscape=None):
-    """Run the site-level Sobol analysis and save first/total-order indices."""
+def sobol_sensitivity(site_cfg, params, output_dir,
+                      n_base=64, n_years=50, n_reps=3, seed=2024):
+    """
+    Variance-based (Sobol) global sensitivity analysis for one site.
+    Sixteen parameters are varied within plausible bounds defined below;
+    the three evaluated outputs are final Ce, final invasive cover, and
+    mean annual conflict frequency. Writes <site_id>_sobol_indices.csv
+    and returns the indices as a DataFrame.
+    """
     from SALib.sample.sobol import sample as sobol_sample
     from SALib.analyze.sobol import analyze as sobol_analyze
+    from copy import deepcopy
 
     park_type      = site_cfg['park_type']
     service_target = site_cfg['service_target']
     climate_zone   = site_cfg['climate_zone']
     site_id        = site_cfg.get('site_id', 'site')
-    management_mode = site_cfg.get('management_mode', 'single')
-    portfolio_method = site_cfg.get('portfolio_method', 'random')
-    if n_base <= 0 or n_years <= 0 or n_reps <= 0:
-        raise ValueError("n_base, n_years, and n_reps must be positive")
-
-    recovery_parameter = (
-        'eco_passive_recovery_NRF'
-        if park_type == 'NRF'
-        else 'eco_passive_recovery_other'
-    )
 
     social_params = {k: site_cfg[k] for k in
                      ('gdp_per_capita', 'civic_participation',
@@ -1279,7 +1318,7 @@ def sobol_sensitivity(site_cfg, params, output_dir, n_base=64, n_years=50,
             'budget',                       'n_managers',
             'invrem_removal_rate',          'invrem_native_boost',
             'ecorest_native_gain',          'eco_invasive_threshold',
-            recovery_parameter,             'eco_passive_canopy_recovery',
+            'eco_passive_recovery_other',   'eco_passive_canopy_recovery',
             'var_warming_rate',             'var_temp_anomaly_sd',
             'var_precip_anomaly_sd',        'soc_budget_elasticity',
             'soc_engagement_threshold',     'pt_native_init_pct',
@@ -1297,11 +1336,9 @@ def sobol_sensitivity(site_cfg, params, output_dir, n_base=64, n_years=50,
         ],
     }
 
-    samples = sobol_sample(
-        problem, n_base, calc_second_order=False, seed=seed
-    )
+    samples = sobol_sample(problem, n_base, calc_second_order=False)
     rng_master = np.random.RandomState(seed)
-    replicate_seeds = rng_master.randint(0, 2**31 - 1, size=n_reps)
+    seeds = rng_master.randint(0, 10**6, size=len(samples))
 
     print(f"[Sobol] {site_id}: {len(samples)} model evaluations "
           f"(n_years={n_years}, n_reps={n_reps})")
@@ -1313,7 +1350,7 @@ def sobol_sensitivity(site_cfg, params, output_dir, n_base=64, n_years=50,
         p['intervention']['invrem_native_boost']         = row[3]
         p['intervention']['ecorest_native_gain']         = row[4]
         p['ecology']['eco_invasive_threshold']           = row[5]
-        p['ecology'][recovery_parameter]                 = row[6]
+        p['ecology']['eco_passive_recovery_other']       = row[6]
         p['ecology']['eco_passive_canopy_recovery']      = row[7]
         p['climate_variability']['var_warming_rate']     = row[8]
         p['climate_variability']['var_temp_anomaly_sd']  = row[9]
@@ -1330,15 +1367,12 @@ def sobol_sensitivity(site_cfg, params, output_dir, n_base=64, n_years=50,
         n_managers_i = max(1, int(round(row[1])))
 
         ce_runs, inv_runs, cf_runs = [], [], []
-        for r, replicate_seed in enumerate(replicate_seeds):
-            rng = np.random.RandomState(int(replicate_seed))
+        for r in range(n_reps):
+            rng = np.random.RandomState(int(seeds[i]) + r * 7919)
             df_r = simulate_ufp(park_type, service_target, climate_zone,
                                 n_years, budget_i, n_managers_i,
                                 run_id=r, params=p, rng=rng,
-                                social_params=social_params,
-                                management_mode=management_mode,
-                                portfolio_method=portfolio_method,
-                                landscape=landscape)
+                                social_params=social_params)
             end = df_r[df_r['year'] == n_years - 1]
             ce_runs.append(end['Ce'].mean())
             inv_runs.append(end['invasive_cover'].mean())
@@ -1353,10 +1387,7 @@ def sobol_sensitivity(site_cfg, params, output_dir, n_base=64, n_years=50,
 
     rows = []
     for out_name, y in outputs.items():
-        output_values = np.asarray(y, dtype=float)
-        if not np.all(np.isfinite(output_values)):
-            raise RuntimeError(f"Sobol output {out_name!r} contains non-finite values")
-        si = sobol_analyze(problem, output_values,
+        si = sobol_analyze(problem, np.array(y),
                            calc_second_order=False, print_to_console=False)
         for j, pname in enumerate(problem['names']):
             rows.append({
@@ -1375,7 +1406,9 @@ def sobol_sensitivity(site_cfg, params, output_dir, n_base=64, n_years=50,
     print(f"[Sobol] {site_id}: indices saved to {out_path}")
     return df_idx
 
-
+#----------------------------------------------------------------------------
+# Section 6: Early-warning and resilience diagnosis module
+#----------------------------------------------------------------------------
 def _slope(y):
     """Ordinary-least-squares slope of y against its integer index."""
     y = np.asarray(y, dtype=float)
@@ -1398,19 +1431,29 @@ def _lag1_autocorr(y):
 
 
 def compute_early_warning(sim_df, window=10, params=None):
-    """Classify recent resilience signals in an ensemble simulation."""
-    required = {'year', 'Ce', 'invasive_cover', 'conflict_total', 'canopy_cover'}
-    missing = required.difference(sim_df.columns)
-    if missing:
-        names = ', '.join(sorted(missing))
-        raise ValueError(f"Early-warning input is missing column(s): {names}")
-    if sim_df.empty:
-        raise ValueError("Early-warning input must not be empty")
+    """
+    Diagnose whether a park is approaching a degraded ecological state from
+    its simulated annual time series, using rolling-window critical-slowing-
+    down indicators computed on the across-replicate mean trajectory:
 
+        * declining Ce trend over the recent window,
+        * rising temporal variance of Ce (late vs early window),
+        * rising lag-1 autocorrelation of Ce (recent window),
+        * repeated / sustained invasive-threshold crossings,
+        * a rising and elevated conflict frequency,
+        * a sub-failure final Ce.
+
+    Each triggered indicator contributes to a score that maps to a warning
+    level: 'stable', 'watch', 'warning', or 'critical'. A hard 'critical'
+    is also raised when the failure definition is met (invasive cover above
+    threshold for >= ew_consecutive_years AND degraded final Ce).
+
+    Parameters can override window/thresholds via the 'early_warning' group.
+
+    Returns a dict: {window, warning_level, score, flags, indicators}.
+    """
     ew = (params or {}).get('early_warning', {}) if params else {}
     window = int(ew.get('ew_window', window))
-    if window <= 0:
-        raise ValueError("Early-warning window must be positive")
     ce_fail        = ew.get('ew_ce_fail', 0.5)
     inv_thr        = ew.get('ew_invasive_threshold', 0.4)
     consec_req     = int(ew.get('ew_consecutive_years', 5))
@@ -1436,6 +1479,7 @@ def compute_early_warning(sim_df, window=10, params=None):
     ce_trend  = _slope(ce_v[-w:])
     ac_recent = _lag1_autocorr(ce_v[-w:])
 
+    # variance ratio: late-window variance vs early-window variance
     if n >= 2 * window:
         var_start = float(np.var(ce_v[:window]))
         var_end   = float(np.var(ce_v[-window:]))
@@ -1458,10 +1502,10 @@ def compute_early_warning(sim_df, window=10, params=None):
         max_consec = max(max_consec, consec)
 
     conf_trend = _slope(conf_v[-w:])
-    final_conf = float(conf_v[-1])
-    final_ce = float(ce_v[-1])
-    final_inv = float(inv_v[-1])
-    final_canopy = float(can_v[-1])
+    final_conf = float(conf_v[-w:].mean())
+    final_ce   = float(ce_v[-w:].mean())
+    final_inv  = float(inv_v[-w:].mean())
+    final_canopy = float(can_v[-w:].mean())
 
     flags = {
         'ce_declining':       bool(ce_trend < slope_thr),
@@ -1503,10 +1547,16 @@ def compute_early_warning(sim_df, window=10, params=None):
             'flags': flags, 'indicators': indicators}
 
 
-def compute_statistics(sim_df, invasive_threshold=0.4):
-    """Compute the summaries reported for one site simulation."""
-    if sim_df.empty:
-        raise ValueError("Simulation results must not be empty")
+#----------------------------------------------------------------------------
+# Section 7: Summary statistics and site driver
+#----------------------------------------------------------------------------
+def compute_statistics(sim_df):
+    """
+    Compute summary statistics from a simulation results DataFrame.
+
+    Returns dict: annual_means, end_summary, conflict_summary,
+    strategy_profile, pct_runs_threshold, pearson_Ce_sat.
+    """
     annual_means = sim_df.groupby('year')[
         ['Ce', 'Cr', 'Ct', 'Cep',
          'invasive_cover', 'canopy_cover',
@@ -1531,9 +1581,7 @@ def compute_statistics(sim_df, invasive_threshold=0.4):
     strategy_counts  = sim_df['action'].value_counts().to_dict()
     strategy_profile = {a: strategy_counts.get(a, 0) for a in action_order}
 
-    runs_over = (
-        sim_df.groupby('run_id')['invasive_cover'].max() > invasive_threshold
-    )
+    runs_over = sim_df.groupby('run_id')['invasive_cover'].max() > 0.4
     pct_runs_threshold = 100 * runs_over.mean()
 
     pearson = (sim_df[['Ce', 'satisfaction']].corr().iloc[0, 1]
@@ -1550,7 +1598,16 @@ def compute_statistics(sim_df, invasive_threshold=0.4):
 
 
 def run_site(site_cfg, params, output_dir, landscape=None):
-    """Run one site and write its simulation, summary, and warning tables."""
+    """
+    Run the full simulation workflow for one site. Writes
+    Simulation_results.csv, Annual_summary.csv, and Early_warning.csv into
+    output_dir and prints a compact summary. Returns the full simulation
+    DataFrame. Figures are produced separately by ADse-UFPM_Figures.py.
+
+    The management mode is read from the site configuration:
+        management_mode  = single | portfolio   (default single)
+        portfolio_method = random | scipy | fixed (default random)
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     park_type      = site_cfg.get('park_type')
@@ -1598,11 +1655,9 @@ def run_site(site_cfg, params, output_dir, landscape=None):
     annual_summary.to_csv(os.path.join(output_dir, 'Annual_summary.csv'),
                           encoding='utf-8-sig')
 
-    invasive_threshold = params.get('ecology', {}).get(
-        'eco_invasive_threshold', 0.4
-    )
-    stats = compute_statistics(sim_df, invasive_threshold=invasive_threshold)
+    stats = compute_statistics(sim_df)
 
+    # --- Early-warning and resilience diagnosis ---------------------------
     ew_window = int(params.get('early_warning', {}).get('ew_window', 10))
     ew = compute_early_warning(sim_df, window=ew_window, params=params)
     ew_row = {'site_id': site_cfg.get('site_id', ''),
@@ -1626,6 +1681,7 @@ def run_site(site_cfg, params, output_dir, landscape=None):
     for a in action_order:
         print(f"  {action_labels.get(a, a)}: {stats['strategy_profile'].get(a, 0)}")
 
+    # Mean annual disturbance-event frequencies (share of years with an event)
     if 'storm' in sim_df.columns:
         print("\nDisturbance-event frequency (mean share of years):")
         for col, lab in (('heatwave', 'Heatwave'), ('drought_event', 'Drought'),
@@ -1633,13 +1689,10 @@ def run_site(site_cfg, params, output_dir, landscape=None):
                          ('pest_outbreak', 'Pest/disease')):
             print(f"  {lab}: {(sim_df[col] > 0).mean():.3f}")
 
-    print(
-        f"\nRuns with invasive > {100 * invasive_threshold:.0f}%: "
-        f"{stats['pct_runs_threshold']:.1f}%"
-    )
+    print(f"\nRuns with invasive > 40%: {stats['pct_runs_threshold']:.1f}%")
     print(f"Pearson(Ce, satisfaction): {stats['pearson_Ce_sat']:.3f}")
     print(f"\nEarly-warning level: {ew['warning_level'].upper()} "
-          f"(score {ew['score']}/{len(ew['flags'])}); "
+          f"(score {ew['score']}/6); "
           f"final Ce={ew['indicators']['final_Ce']}, "
           f"final invasive={ew['indicators']['final_invasive']}, "
           f"Ce var ratio={ew['indicators']['ce_variance_ratio']}, "
@@ -1648,77 +1701,40 @@ def run_site(site_cfg, params, output_dir, landscape=None):
 
     return sim_df
 
-
+#----------------------------------------------------------------------------
+# Section 8: Landscape descriptor builder
+#----------------------------------------------------------------------------
 def build_landscape(boundary_path, utm_epsg, staff, site_dir,
                     date_window="2025-06-01/2025-09-30", edge_depth=100,
                     canopy_ndvi=0.7, min_patch_ha=0.1, matrix_ring=1000):
-    """Build landscape descriptors from a boundary, Sentinel-2, and OSM."""
-    try:
-        import geopandas as gpd
-        import planetary_computer as pc
-        import pystac_client
-        import rasterio
-        from rasterio.features import rasterize
-        from rasterio.warp import transform_bounds
-        from rasterio.windows import from_bounds
-        from scipy import ndimage
-        from shapely.geometry import LineString
-        from shapely.ops import unary_union
-    except ImportError as exc:
-        raise ImportError(
-            "build_landscape requires geopandas, planetary-computer, "
-                       "pystac-client, rasterio, scipy, and shapely"
-        ) from exc
+    # Turn one park boundary into the landscape descriptor block the model
+    # reads. Writes Landscape_descriptors.csv into site_dir and returns the
+    # descriptors as a dict. Needs geopandas, rasterio, scipy, pystac-client
+    # and planetary-computer; run it once per park, not every simulation.
+    if not landscape_tools:
+        raise ImportError("build_landscape needs geopandas, rasterio, scipy, "
+                          "pystac-client and planetary-computer")
 
-    if staff <= 0:
-        raise ValueError("staff must be positive")
-    if edge_depth < 0 or matrix_ring <= 0 or min_patch_ha < 0:
-        raise ValueError(
-            "edge_depth and min_patch_ha must be non-negative; "
-            "matrix_ring must be positive"
-        )
-
+    # --- Boundary, area and shape ---
     parks = gpd.read_file(boundary_path)
-    if parks.empty:
-        raise ValueError("The boundary file contains no features")
-    if parks.crs is None:
-        raise ValueError("The boundary file has no coordinate reference system")
-    valid_geometry = parks.geometry.dropna()
-    valid_geometry = valid_geometry[~valid_geometry.is_empty]
-    if valid_geometry.empty:
-        raise ValueError("The boundary file contains no valid geometry")
-
-    park_ll = unary_union(
-        gpd.GeoSeries(valid_geometry, crs=parks.crs).to_crs(4326).values
-    ).buffer(0)
-    if park_ll.is_empty:
-        raise ValueError("The dissolved park boundary is empty")
+    parks = parks.set_crs(4326) if parks.crs is None else parks
+    park_ll = unary_union(parks.to_crs(4326).geometry.values).buffer(0)
     park_m = gpd.GeoSeries([park_ll], crs=4326).to_crs(utm_epsg).iloc[0]
 
     area_ha = park_m.area / 1e4
-    if area_ha <= 0:
-        raise ValueError("The projected park boundary has zero area")
     perimeter_m = park_m.length
     edge_density = perimeter_m / area_ha
     shape_index = perimeter_m / (2 * np.sqrt(np.pi * park_m.area))
-    edge_fraction = float(np.clip(
-        1 - park_m.buffer(-edge_depth).area / park_m.area, 0.0, 1.0
-    ))
+    edge_fraction = 1 - park_m.buffer(-edge_depth).area / park_m.area
 
+    # --- Canopy from a cloud-free growing-season Sentinel-2 scene ---
     catalog = pystac_client.Client.open(
         "https://planetarycomputer.microsoft.com/api/stac/v1", modifier=pc.sign_inplace)
     scenes = catalog.search(collections=["sentinel-2-l2a"],
                             intersects=park_ll.__geo_interface__,
                             datetime=date_window,
                             query={"eo:cloud_cover": {"lt": 30}}).item_collection()
-    if not scenes:
-        raise RuntimeError(
-            f"No Sentinel-2 scenes found for {date_window} with cloud cover < 30%"
-        )
-    scene = min(
-        scenes,
-        key=lambda item: item.properties.get("eo:cloud_cover", float("inf")),
-    )
+    scene = sorted(scenes, key=lambda s: s.properties["eo:cloud_cover"])[0]
     baseline = float(str(scene.properties.get("s2:processing_baseline", "05.00")))
     offset = 1000.0 if baseline >= 4.0 else 0.0
     outer_m = park_m.buffer(matrix_ring)
@@ -1727,35 +1743,17 @@ def build_landscape(boundary_path, utm_epsg, staff, site_dir,
         with rasterio.open(href) as band:
             box = transform_bounds(utm_epsg, band.crs, *outer_m.bounds)
             window = from_bounds(*box, band.transform).round_offsets().round_lengths()
-            values = band.read(1, window=window, masked=True)
-            values = values.astype("float32").filled(np.nan)
-            return (values,
+            return (band.read(1, window=window).astype("float32"),
                     band.window_transform(window), band.crs)
 
     red, grid, grid_crs = read_band(scene.assets["B04"].href)
-    nir, nir_grid, nir_crs = read_band(scene.assets["B08"].href)
-    if red.shape != nir.shape or grid != nir_grid or grid_crs != nir_crs:
-        raise RuntimeError("Sentinel-2 red and NIR bands are on different grids")
-
-    red_corrected = red - offset
-    nir_corrected = nir - offset
-    denominator = nir_corrected + red_corrected
-    ndvi = np.full(red.shape, np.nan, dtype="float32")
-    valid = np.isfinite(denominator) & (denominator > 0)
-    np.divide(
-        nir_corrected - red_corrected,
-        denominator,
-        out=ndvi,
-        where=valid,
-    )
+    nir, _, _ = read_band(scene.assets["B08"].href)
+    ndvi = ((nir - offset) - (red - offset)) / np.maximum((nir - offset) + (red - offset), 1e-6)
 
     park_px = rasterize([(gpd.GeoSeries([park_m], crs=utm_epsg).to_crs(grid_crs).iloc[0], 1)],
                         out_shape=ndvi.shape, transform=grid, dtype="uint8").astype(bool)
-    park_px &= np.isfinite(ndvi)
-    if not park_px.any():
-        raise RuntimeError("The selected Sentinel-2 scene does not cover the park")
-    pixel_m = float(np.sqrt(abs(grid.a * grid.e)))
-    cell_ha = abs(grid.a * grid.e) / 1e4
+    pixel_m = abs(grid.a)
+    cell_ha = (pixel_m ** 2) / 1e4
 
     canopy = park_px & (ndvi > canopy_ndvi)
     labels, _ = ndimage.label(canopy, structure=np.ones((3, 3)))
@@ -1764,10 +1762,11 @@ def build_landscape(boundary_path, utm_epsg, staff, site_dir,
     labels, patch_count = ndimage.label(canopy, structure=np.ones((3, 3)))
     patch_ha = np.bincount(labels.ravel())[1:] * cell_ha
     canopy_ha = patch_ha.sum()
-    canopy_observed = float(np.clip(
-        canopy_ha / (park_px.sum() * cell_ha), 0.0, 1.0
-    ))
+    canopy_observed = canopy_ha / (park_px.sum() * cell_ha)
 
+    # --- Fragmentation ---
+    # Total canopy edge counts every cell face between canopy and non-canopy,
+    # so internal gaps count as well as the park outline.
     def face_length(binary):
         padded = np.pad(binary, 1)
         middle = padded[1:-1, 1:-1]
@@ -1777,39 +1776,18 @@ def build_landscape(boundary_path, utm_epsg, staff, site_dir,
 
     canopy_edge_m = face_length(canopy)
     canopy_edge_density = canopy_edge_m / area_ha
-    if canopy_ha > 0:
-        division_index = float(np.clip(
-            1 - ((patch_ha / canopy_ha) ** 2).sum(), 0.0, 1.0
-        ))
-        largest_patch = float(np.clip(
-            patch_ha.max() / (park_px.sum() * cell_ha), 0.0, 1.0
-        ))
-        core_canopy_30 = float(np.clip(
-            (ndimage.distance_transform_edt(canopy) * pixel_m > 30).sum()
-            * cell_ha / canopy_ha,
-            0.0,
-            1.0,
-        ))
-    else:
-        division_index = 0.0
-        largest_patch = 0.0
-        core_canopy_30 = 0.0
+    division_index = 1 - ((patch_ha / canopy_ha) ** 2).sum()
+    largest_patch = patch_ha.max() / (park_px.sum() * cell_ha)
+    core_canopy_30 = ((ndimage.distance_transform_edt(canopy) * pixel_m > 30).sum()
+                      * cell_ha / canopy_ha)
     edge_per_staff = canopy_edge_m / max(staff, 1)
 
+    # --- Surrounding matrix ---
     outer_px = rasterize([(gpd.GeoSeries([outer_m], crs=utm_epsg).to_crs(grid_crs).iloc[0], 1)],
                          out_shape=ndvi.shape, transform=grid, dtype="uint8").astype(bool)
-    matrix_px = outer_px & ~park_px & np.isfinite(ndvi)
-    if matrix_px.any():
-        matrix_built = float((ndvi[matrix_px] < 0.25).mean())
-    else:
-        matrix_built = 0.0
-        warnings.warn(
-            "No valid Sentinel-2 pixels were available in the surrounding ring; "
-            "matrix_built was set to 0",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    matrix_built = float((ndvi[outer_px & ~park_px] < 0.25).mean())
 
+    # --- Access network from OpenStreetMap ---
     vehicle_tags = {"motorway", "trunk", "primary", "secondary", "tertiary",
                     "unclassified", "residential", "service", "track"}
     foot_tags = {"footway", "path", "steps", "pedestrian", "cycleway", "bridleway"}
@@ -1823,48 +1801,33 @@ def build_landscape(boundary_path, utm_epsg, staff, site_dir,
     headers = {"User-Agent": "ADse-UFPM landscape preprocessing"}
 
     answer = None
-    last_error = None
     for attempt in range(6):
         try:
             request = urllib.request.Request(mirrors[attempt % len(mirrors)],
                                              data=payload, headers=headers)
-            with urllib.request.urlopen(request, timeout=240) as response:
-                answer = json.load(response)
+            answer = json.load(urllib.request.urlopen(request, timeout=240))
             break
-        except (OSError, TimeoutError, ValueError) as exc:
-            last_error = exc
-            if attempt < 5:
-                time.sleep(8 * (attempt + 1))
+        except Exception:
+            time.sleep(8 * (attempt + 1))
 
     vehicle_km = foot_km = 0.0
     if answer is None:
-        raise RuntimeError(
-            "Could not retrieve the OpenStreetMap road network after six attempts"
-        ) from last_error
+        print("  Overpass unavailable, access descriptors left at 0")
     else:
-        ways = [
-            {
-                "highway": element.get("tags", {}).get("highway", ""),
-                "geometry": LineString([
-                    (point["lon"], point["lat"])
-                    for point in element["geometry"]
-                ]),
-            }
-            for element in answer.get("elements", [])
-            if len(element.get("geometry", [])) >= 2
-        ]
-        if ways:
-            lines = gpd.GeoDataFrame(ways, geometry="geometry", crs=4326)
-            lines = lines.to_crs(utm_epsg)
-            lines["geometry"] = lines.geometry.intersection(park_m)
-            lines = lines[~lines.geometry.is_empty].copy()
-            lines["km"] = lines.geometry.length / 1000
-            vehicle_km = float(lines[lines.highway.isin(vehicle_tags)].km.sum())
-            foot_km = float(lines[lines.highway.isin(foot_tags)].km.sum())
+        ways = [{"highway": el["tags"].get("highway", ""),
+                 "geometry": LineString([(q["lon"], q["lat"]) for q in el["geometry"]])}
+                for el in answer["elements"] if len(el.get("geometry", [])) >= 2]
+        lines = gpd.GeoDataFrame(ways, crs=4326).to_crs(utm_epsg)
+        lines["geometry"] = lines.geometry.intersection(park_m)
+        lines = lines[~lines.geometry.is_empty]
+        lines["km"] = lines.geometry.length / 1000
+        vehicle_km = float(lines[lines.highway.isin(vehicle_tags)].km.sum())
+        foot_km = float(lines[lines.highway.isin(foot_tags)].km.sum())
 
     access_density = 1000 * (vehicle_km + foot_km) / area_ha
     vehicle_density = 1000 * vehicle_km / area_ha
 
+    # --- Write the block ---
     rows = [
         ("park_area", area_ha, "ha", "Measured from the boundary polygon"),
         ("edge_density", edge_density, "m/ha", "Park outline only"),
@@ -1886,12 +1849,11 @@ def build_landscape(boundary_path, utm_epsg, staff, site_dir,
     ]
     os.makedirs(str(site_dir), exist_ok=True)
     out_file = os.path.join(str(site_dir), "Landscape_descriptors.csv")
-    with open(out_file, "w", encoding="utf-8", newline='') as handle:
+    with open(out_file, "w", encoding="utf-8") as handle:
         handle.write("#--- Landscape descriptors, from build_landscape() ---\n")
         handle.write(f"# Scene {scene.id}, {scene.properties['datetime'][:10]}.\n")
-        writer = csv.writer(handle)
         for name, value, units, detail in rows:
-            writer.writerow((name, f"{value:.3f}", units, detail))
+            handle.write(f"{name},{value:.3f},{units},{detail}\n")
 
     print(f"  Landscape    : {patch_count} canopy patches, "
           f"{canopy_edge_density:,.0f} m/ha canopy edge, "
